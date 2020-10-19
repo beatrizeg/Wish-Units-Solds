@@ -5,6 +5,8 @@ library(caret)
 library(ggplot2)
 library(corrplot)
 library(forcats)
+library(rattle)
+library(xgboost)
 
 load("rdas/main.rda")
 load("rdas/cat.rda")
@@ -227,7 +229,169 @@ main_m %>%
 main_m %>% 
   ggplot(aes(uses_ad_boosts, units_sold)) + geom_violin()
 
+levels <- c("10", "50", "100", "1000", "5000", "10000", "20000", "50000", "1e+05")
+main_p <- main_m %>% mutate(units_sold = factor(units_sold, levels=levels))
 
 
+#MACHINE LEARNING
+#split into train and test set
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(main_m$units_sold, times=1, p=0.15, list=FALSE)
+train_set <- main_p[-test_index,] %>% select(-product_id)
+test_set <- main_p[test_index,] %>% select(-product_id) 
+
+#1 Linear regression
+train_lm <- train(units_sold ~ ., data=train_set, method="lm")
+y_lm <- predict(train_knn, test_set, type="raw")
+acc_lm <- confusionMatrix(y_lm, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- tibble(method = "Linear Regression", Accuracy = acc_lm) #Create table to store different accuracy results to compare
+
+#2 gam loess
+train_loess <- train(units_sold ~ ., data=train_set, method="gamLoess")
+#span <- train_loess$bestTune$span
+ggplot(train_loess, highlight = TRUE)
+y_loess <- predict(train_loess, test_set, type="raw")
+acc_loess <- confusionMatrix(y_loess, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="GamLoess",
+                                    Accuracy = acc_loess))
+
+#3 Generalized linear models
+train_glm <- train(units_sold ~ ., data=train_set, method="glm", family="poisson")
+ggplot(train_glm, highlight = TRUE)
+y_glm <- predict(train_loess, test_set, type="raw")
+acc_glm <- confusionMatrix(y_glm, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="GLM",
+                                    Accuracy = acc_glm))
+
+#4 k-nearest neighbor
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "cv", number=4, p=0.25)
+train_knn <- train(units_sold ~ ., data=train_set, method="knn", tuneGrid = data.frame(k=seq(3, 71, 2)))
+ggplot(train_knn, highlight = TRUE)
+train_knn$bestTune
+k <- train_knn$bestTune
+y_knn <- predict(train_knn, test_set, type="raw")
+acc_knn <- confusionMatrix(y_knn, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="KNN",
+                                    Accuracy = acc_knn))
+
+#5 QDA
+train_qda <- train(units_sold ~ ., data=train_set, method="qda")
+y_qda <- predict(train_qda, test_set, type="raw")
+acc_qda <- confusionMatrix(y_qda, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="QDA",
+                                    Accuracy = acc_qda))
+
+#6 LDA
+train_lda <- train(units_sold ~ ., data=train_set, method="lda")
+y_lda <- predict(train_qda, test_set, type="raw")
+acc_lda <- confusionMatrix(y_lda, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="LDA",
+                                    Accuracy = acc_lda))
+
+#7.1 Regression trees regular values
+train_rpart_no <- train(units_sold ~ ., data=train_set, method="rpart")
+ggplot(train_rpart_no, highlight = TRUE)
+fancyRpartPlot(train_rpart_no$finalModel, sub = NULL)
+plot(train_rpart_no$finalModel, margin = 0.3) 
+text(train_rpart_no$finalModel, cex = 0.4)
+train_rpart_no$finalModel$variable.importance
+y_rpart_no <- predict(train_rpart_no, test_set, type="raw")
+acc_rpart_no <- confusionMatrix(y_rpart_no, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Regression Trees not optimised",
+                                    Accuracy = acc_rpart_no))
+
+#7 Regression trees optimising cp and minsplit
+train_rpart <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.05, len = 25)), control=rpart::rpart.control(minsplit=15))
+ggplot(train_rpart, highlight = TRUE)
+cp <- train_rpart$bestTune$cp
+minsplit <- seq(10, 20, len=5)
+acc <- sapply(minsplit, function(ms){
+  train(units_sold ~ ., method = "rpart", data = train_set, tuneGrid = data.frame(cp=cp),
+        control=rpart::rpart.control(minsplit=ms))$results$Accuracy })
+qplot(minsplit, acc)
+minsplit <- minsplit[which.max(acc)]
+train_rpart <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = cp), control=rpart::rpart.control(minsplit=minsplit))
+fancyRpartPlot(train_rpart$finalModel, sub = NULL)
+plot(train_rpart$finalModel, margin = 0.3) 
+text(train_rpart$finalModel, cex = 0.4)
+train_rpart$finalModel$variable.importance
+y_rpart <- predict(train_rpart, test_set, type="raw")
+acc_rpart <- confusionMatrix(y_rpart, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Regression Trees Optimized",
+                                    Accuracy = acc_rpart))
+
+#8.1 Random Forest not optimised
+train_rf_no <- train(units_sold ~ ., data=train_set, method="rf")
+mtry <- train_rf_no$bestTune
+
+y_rf_no <- predict(train_rf_no, test_set, type="raw")
+acc_rf_no <- confusionMatrix(y_rf_no, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Random Forest not optimized",
+                                    Accuracy = acc_rf_no))
+
+#8.2 Random Forest optimising minimum node size
+nodesize <- seq(12, 28, 2)
+acc <- sapply(nodesize, function(ns){
+  train(units_sold ~ ., method = "rf", data = train_set, tuneGrid = data.frame(mtry = mtry),
+        nodesize = ns)$results$Accuracy })
+qplot(nodesize, acc)
+nodesize <- nodesize[which.max(acc)]
 
 
+set.seed(1234, sample.kind = "Rounding")
+control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+rfgrid_1 <- expand.grid(mtry=seq(29, 37, 2))
+train_rf_1 <- train(units_sold ~ ., method = "rf", data = train_set, 
+                  trControl=control_rf, tuneGrid = rfgrid_1,
+      nodesize = 20, ntree=100, replace=TRUE, importance=TRUE)
+
+rfgrid_2 <- expand.grid(mtry=seq(15, 37, 2))
+train_rf_2 <- train(units_sold ~ ., method = "rf", data = train_set, 
+                    trControl=control_rf, tuneGrid = rfgrid_2,
+                    nodesize = 5, ntree=100, replace=TRUE, importance=TRUE)
+
+rfgrid_3 <- expand.grid(mtry=seq(13, 21, 2))
+train_rf_3 <- train(units_sold ~ ., method = "rf", data = train_set, 
+                    trControl=control_rf, tuneGrid = rfgrid_3,
+                    nodesize = 1, ntree=1500, replace=TRUE, importance=TRUE)
+
+ggplot(train_rf_1, highlight = TRUE)
+ggplot(train_rf_2, highlight = TRUE)
+ggplot(train_rf_3, highlight = TRUE)
+
+y_rf <- predict(train_rf_3, test_set, type="raw")
+acc_rf <- confusionMatrix(y_rf, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Random Forest optimized",
+                                    Accuracy = acc_rf))
+
+#9 XGBoost #nocorre
+train_xgbm <- train(units_sold ~ ., method="xgbTree", data=train_set)
+y_xgbm <- predict(train_xgbm, test_set, type="raw")
+acc_xgbm <- confusionMatrix(y_xgbm, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="XGBoost",
+                                    Accuracy = acc_xgbm))
+
+#10 H20
+library(h2o)
+packageDescription("h2o")
+main_h2o <- main_p %>% select(-product_id)
+h2o.init()
+data_h2o <- as.h2o(main_h2o)
+automl_all <- h2o.automl(y=3, training_frame=data_h2o, max_runtime_secs=500,
+                            seed=1, keep_cross_validation_predictions=TRUE, sort_metric="AUC")
+
+automl_all_lb <- automl_all@leaderboard
+print(automl_all_lb, n=nrow(automl_all_lb))
+
+automl_all@leader
