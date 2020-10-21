@@ -1,0 +1,307 @@
+---
+title: "Product sales prediction"
+author: "Beatriz Estrella"
+date: "12/10/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = FALSE, message = FALSE, warning = FALSE)
+options(tinytex.verbose = TRUE)
+```
+
+# 1. INTRODUCTION
+## 1.1. Project goal
+
+The motivation of this project is to complete the task of the course in Data Science: Capstone from HarvardX, course PH125.9x, under the *Choose your own!* project submission.
+
+The project aims to predict the units sold for each specific product. The database was downloaded from Kaggle - [link](https://www.kaggle.com/jmmvutu/summer-products-and-sales-in-ecommerce-wish) and consists of data from *wish* platform [link](https://www.wish.com). *Wish* is a retailer that sells millions of product to customer in a e-commerce marketplace. The data consists of the products under the tag "summer" showed during August 2020.
+
+We want to see which features can predict the units that will be sold in a specific product, and the accuracy that we get under the different machine learning algorithms. 
+
+This is a multinomial classification problem as units sold will be treated as a categorical value, due to the low number of different values we have for this column in the dataset. That way, we will use different Machine Learning algorithms that can predict under this assumption.
+
+Apart from the main dataset (stored as data frame in main variable), we have a support dataset that contains the main tag categories and the count on how many times they are used in the platform, thus we can deduce that the higher the count, the more relevant they are (stored as data frame in cat variable).
+
+Datasets, .R code and all relevant documentation regarding this project can be found online at [link](https://github.com/beatrizeg/Wish-Units-Solds).
+
+```{r load Data and libraries, echo=FALSE}
+library(tidyverse)
+library(stringr)
+library(purrr)
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(forcats)
+library(rattle)
+library(xgboost)
+library(klaR)
+
+url_main <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/summer-products-with-rating-and-performance_2020-08.csv"
+dest_file <- "data/main.csv"
+download.file(url_main, destfile = dest_file)
+main <- read_csv("data/main.csv")
+save(main, file = "rdas/main.rda")
+
+url_cat <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/unique-categories.sorted-by-count.csv"
+dest_file_cat <- "data/cat.csv"
+download.file(url_cat, destfile = dest_file_cat)
+cat <- read_csv("data/cat.csv")
+save(cat, file = "rdas/cat.rda")
+
+load("rdas/main.rda")
+load("rdas/cat.rda")
+
+main <- as.data.frame(main)
+cat <- as.data.frame(cat)
+```
+
+## 1.2. Inspecting the dataset
+
+Now we proceed to inspect the main dataset that is directly downloaded from Kaggle. Using the dim and summary functions we see:
+
+```{r inspect}
+dim(main)
+summary(main)
+```
+
+The dataset consists of 1573 rows and 43 columns. We see as well that we have character and numeric values and that we also have some NAs in the dataset. 
+
+First thing we have to take into account now, is that having only ~1k of data points is not a lot. This will probably lead to the accuracy of the prediction not being too high. We will be able to check on this later on.
+
+To check which columns gives us NAs we use. 
+
+```{r nas}
+apply(main, 2, function(x) any(is.na(x)))
+```
+
+So we proceed to substitute the NAs in *rating_<X>_count* columns to 0 and also the ones in the *has_urgency_banner* to 0 as 0 represents *FALSE*.
+
+We see that we still get NAs in columns *product_color*, *product_variation_size_id*, *urgency_text*, *origin_country*, *merchant_name*, *merchant_info_subtitle* and *merchant_profile_picture*, but we will deal with these later as we will see, because these features will not be included in the model, except for *product_color*, *product_variation_size_id* and *merchant_profile_picture* that will be tidied up later.
+
+Lastly, it is important to note that the *product_id* is the unique differentiator of each product. We will see later the reason for a few of them being duplicated and solve the issue.
+
+## 1.3. Libraries
+
+All of these these libraries will be loaded:
+
+```{r libraries, echo=TRUE, eval=FALSE}
+library(stringr)
+library(purrr)
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(forcats)
+library(rattle)
+library(xgboost)
+library(klaR)
+library(h2o)
+```
+
+# 2. METHOD AND ANALYSIS
+## 2.1. Exploration of the dataset
+
+Now we proceed to inspect the different features/variables in the dataset, taking into account that the value we want to be able to predict is *units_sold*.
+
+### 2.1.1. Checking features variability and adjusting
+#### *product_color*
+
+First of all we are going to study the different categories under the predictor of *product_color*. We can see all the different colors we get by showing the table and histogram below. 
+
+```{r product_color}
+table(main$product_color) %>% sort(decreasing = TRUE)
+main %>% ggplot(aes(product_color))+geom_bar()
+```
+
+We see that most of the categories only apply for 2 or less *products_id*, so we will group into main color categories this feature in order to provide the algorithm with more valuable data.
+
+```{r color class}
+main <- main %>% mutate(product_color=
+                          as.factor(case_when(
+                            str_detect(product_color, "&") ~ "two colors",
+                            str_detect(product_color, "blue") ~ "blue",
+                            str_detect(product_color, "navy") ~ "blue",
+                            str_detect(product_color, "green") ~ "green",
+                            str_detect(product_color, "red") ~ "red",
+                            str_detect(product_color, "gray") ~ "grey",
+                            str_detect(product_color, "grey") ~ "grey",
+                            str_detect(product_color, "coffee") ~ "brown",
+                            str_detect(product_color, "brown") ~ "brown",
+                            str_detect(product_color, "pink") ~ "pink",
+                            str_detect(product_color, "rose") ~ "pink",
+                            str_detect(product_color, "black") ~ "black",
+                            str_detect(product_color, "white") ~ "white",
+                            str_detect(product_color, "purple") ~ "purple",
+                            str_detect(product_color, "orange") ~ "orange",
+                            str_detect(product_color, "multicolor") ~ "multicolor",
+                            str_detect(product_color, "yellow") ~ "yellow",
+                            TRUE ~ "other")))
+
+main %>% ggplot(aes(product_color))+geom_bar()
+```
+
+Now we get just a few main categories which allows as to treat this feature as a categorical value.
+
+#### *product_variation_size_id*
+
+We are going to do the same exercise we did with the *product_color* variable with the *product_variation_size_id*. We can check the high variability and low information it provides as it is given in the dataset.
+
+```{r product_size}
+table(main$product_variation_size_id) %>% sort(decreasing = TRUE)
+main %>% ggplot(aes(product_variation_size_id))+geom_bar()
+```
+
+We again reassign the values to the main categories and again, we treat it as a categorical value, which provides much more information to the algorithms. 
+
+```{r size reassign, echo=FALSE}
+main <- main %>% mutate(product_variation_size_id=
+                          as.factor(case_when(product_variation_size_id=="XXXS" ~ "XXXS",
+                                   product_variation_size_id=="XXS" ~ "XXS",
+                                   product_variation_size_id=="XS" | 
+                                     product_variation_size_id=="XS." |
+                                     product_variation_size_id=="SIZE XS" |
+                                     product_variation_size_id=="Size-XS" |
+                                     product_variation_size_id=="Size-XS" ~ "XS",
+                                   product_variation_size_id=="S" | 
+                                     product_variation_size_id=="S." |
+                                     product_variation_size_id=="s" |
+                                     product_variation_size_id=="Size S" |
+                                     product_variation_size_id=="Size-S" |
+                                     product_variation_size_id=="size S" |
+                                     product_variation_size_id=="Size S." |
+                                     product_variation_size_id=="S Pink" |
+                                     product_variation_size_id=="Suit-S"~ "XS",
+                                   product_variation_size_id=="M" | 
+                                     product_variation_size_id=="M."~ "M",
+                                   product_variation_size_id=="L" | 
+                                     product_variation_size_id=="SizeL" ~ "L",
+                                   product_variation_size_id=="XL"   ~ "XL",
+                                   product_variation_size_id=="XXL" | 
+                                     product_variation_size_id=="2XL" ~ "XXL",
+                                   product_variation_size_id=="XXXL" ~ "XXXL",
+                                   product_variation_size_id=="4XL" ~ "4XL",
+                                   TRUE ~ "other")))
+```
+```{r size graph}
+table(main$product_variation_size_id) %>% sort(decreasing = TRUE)
+main %>% ggplot(aes(product_variation_size_id))+geom_bar()
+```
+
+#### *origin_country*
+
+We again see variability for *origin_country*, and reassign converting the variable to factor.
+
+```{r ocountry, echo=FALSE, eval=TRUE}
+table(main$origin_country) %>% sort(decreasing = TRUE)
+main <- main %>% mutate(
+  origin_country=as.factor(case_when(
+    origin_country == "CN" | origin_country == "US" ~ origin_country,
+    TRUE ~ "other"
+  )))
+
+main %>% ggplot(aes(origin_country))+geom_bar()
+```
+
+#### *currency_buyer*
+
+We check that there is only one currency in the dataset and that no unification of units is needed.
+
+```{r currency}
+n_distinct(main$currency_buyer)
+```
+
+#### *units_sold*
+
+Now we study the characteristics of the variable we want to predict.
+
+```{r sold}
+table(main$units_sold) %>% sort(decreasing = TRUE)
+```
+
+We see that there are only 15 different values, and in fact six of them are below 10 so we could group this into 9 different categories and treat the project as a categorical problem. This is what we will do.
+
+```{r sold graphs, echo=FALSE}
+main <- main %>% mutate(units_sold = ifelse(units_sold<10, 10, units_sold))
+main %>% ggplot(aes(units_sold))+geom_bar()
+```
+
+#### *product_id*
+
+As we commented in the introduction, we can easily check that there are less unique *product_id* values than rows in the dataset. In fact, there are 1341 different *product_id* and 1573 rows.
+
+```{r duplicates}
+n_distinct(main$product_id)
+```
+
+So we are going to examine an example of a duplicated *product_id* (ex. "5577faf03cef83230c39d0c3") and see the differences in the rows.
+
+```{r exam dup}
+main %>% group_by(product_id) %>% summarize(n=n()) %>% arrange(desc(n))
+main %>% filter(product_id=="5577faf03cef83230c39d0c3")
+```
+
+We can see that the almost every column acquires the same value, except for *has_urgency_banner*. Thus we can easily deduce that during the month, this feature was changed for the *product_id* and a new row was created. As the impact is minimal and we do not know which of the rows was active during most of the month, we will just simply delete the duplicated rows as:
+
+```{r remove dup}
+main <- distinct(main, product_id, .keep_all = TRUE)
+```
+
+### 2.1.2. Assigning classes to features
+
+Now we have studied the variability of the features that had a class "character" and reassigned them the class "factor" for the algorithms to work better, a few more predictors that acquire few different values are assigned to factor as well. We also saw that some features acquired either a 0 or a 1, so we will change this to logical class. 
+
+```{r classes}
+main <- main %>% mutate(currency_buyer=as.factor(currency_buyer),
+                        badges_count=as.factor(badges_count),
+                        uses_ad_boosts=as.logical(uses_ad_boosts),
+                        badge_local_product=as.logical(badge_local_product),
+                        badge_product_quality=as.logical(badge_product_quality),
+                        badge_fast_shipping=as.logical(badge_fast_shipping),
+                        shipping_option_price=as.factor(shipping_option_price),
+                        shipping_is_express=as.logical(shipping_is_express),
+                        has_urgency_banner=as.logical(has_urgency_banner),
+                        merchant_has_profile_picture=as.logical(merchant_has_profile_picture),
+                        inventory_total=as.factor(inventory_total))
+```
+
+### 2.1.3. Introducing tags model
+
+In the main dataset, we can see a column named *tags* that includes all tags that were given to each *product_id*. In the cat dataset, there are two columns, the column *counts* gives the number of times each tag, which is in column *keyword*, appears in the main dataset. We can assume then, that those keywords that appear the most, are more relevant than those than appear the less. Thus we create a new column in the cat dataset, named *cat_n*, with a number that goes from 1 to 4, as in code below. What we are trying to do here is to have a column that provides a relevance number for the tags that were used in the *product_id*. 
+
+```{r cat_n}
+cat <- cat %>% mutate(cat_n =
+                        case_when(count>=1000 ~ 4,
+                                  count<1000 & count>=500 ~ 3,
+                                  count<500 & count>=200 ~ 2,
+                                  count < 200 ~ 1,
+                                  TRUE ~ 0))
+```
+
+Once we have this, we want to transfer this information to the main dataset. First, the *tags* column contains all tags separated by a comma. We split all the tags into different columns, getting 41 columns. Then, we substitute each tag for its value *cat_n* that we assigned in the cat dataset. Once we have the values in *numeric* class, we sum all tag values for each row or *product_id* and bind this new column, named *n_tags* to the main dataset.
+
+```{r n_tags}
+main_tags <- str_split(main$tags, ",", simplify = TRUE)
+
+for (i in 1:41){
+main_tags[,i] <- with(cat, cat_n[match(main_tags[,i], keyword)])
+} #next step change to numeric values 
+
+main_tags <- as.data.frame(main_tags)
+main_tags[] <- lapply(main_tags, function(x) as.numeric(as.character(x))) 
+
+main_tags <- main_tags %>% mutate(n_tags = rowSums(main_tags, na.rm=TRUE)) %>% dplyr::select(n_tags)
+
+main_m <- bind_cols(main, main_tags)
+```
+
+Lastly, we disregards all 41 columns that were created and keep only those that can provide relevant information *(price, retail_price, units_sold, uses_ad_boosts, rating, rating_count,  rating_five_count, rating_four_count, rating_three_count, rating_two_count, rating_one_count, badges_count, badge_local_product, badge_product_quality, badge_fast_shipping, product_color, product_variation_size_id, product_variation_inventory, shipping_option_price, shipping_is_express, countries_shipped_to, inventory_total, has_urgency_banner, origin_country, merchant_rating_count, merchant_rating, merchant_has_profile_picture, product_id, n_tags)*, disregarding also those such as *title*, *merchant_name*, *product_url*, etc.
+
+```{r select, echo=FALSE}
+main_m <- main_m %>% dplyr::select(price, retail_price, units_sold, uses_ad_boosts, rating, rating_count, 
+                 rating_five_count, rating_four_count, rating_three_count, rating_two_count, rating_one_count,
+                 badges_count, badge_local_product, badge_product_quality, badge_fast_shipping,
+                 product_color, product_variation_size_id, product_variation_inventory,
+                 shipping_option_price, shipping_is_express, countries_shipped_to, inventory_total,
+                 has_urgency_banner, origin_country, merchant_rating_count, merchant_rating,
+                 merchant_has_profile_picture, product_id, n_tags)
+```
