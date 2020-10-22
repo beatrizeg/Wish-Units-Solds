@@ -15,7 +15,7 @@ options(tinytex.verbose = TRUE)
 
 The motivation of this project is to complete the task of the course in Data Science: Capstone from HarvardX, course PH125.9x, under the *Choose your own!* project submission.
 
-The project aims to predict the units sold for each specific product. The database was downloaded from Kaggle - [link](https://www.kaggle.com/jmmvutu/summer-products-and-sales-in-ecommerce-wish) and consists of data from *wish* platform [link](https://www.wish.com). *Wish* is a retailer that sells millions of product to customer in a e-commerce marketplace. The data consists of the products under the tag "summer" showed during August 2020.
+The project aims to predict the units sold for each specific product. The database was downloaded from - [Kaggle](https://www.kaggle.com/jmmvutu/summer-products-and-sales-in-ecommerce-wish) and consists of data from platform [wish](https://www.wish.com). *Wish* is a retailer that sells millions of product to customer in a e-commerce marketplace. The data consists of the products under the tag "summer" showed during August 2020.
 
 We want to see which features can predict the units that will be sold in a specific product, and the accuracy that we get under the different machine learning algorithms. 
 
@@ -23,7 +23,7 @@ This is a multinomial classification problem as units sold will be treated as a 
 
 Apart from the main dataset (stored as data frame in main variable), we have a support dataset that contains the main tag categories and the count on how many times they are used in the platform, thus we can deduce that the higher the count, the more relevant they are (stored as data frame in cat variable).
 
-Datasets, .R code and all relevant documentation regarding this project can be found online at [link](https://github.com/beatrizeg/Wish-Units-Solds).
+Datasets, .R code and all relevant documentation regarding this project can be found online at [github.com/beatrizeg/Wish-Units-Solds](https://github.com/beatrizeg/Wish-Units-Solds).
 
 ```{r load Data and libraries, echo=FALSE}
 library(tidyverse)
@@ -222,7 +222,7 @@ We see that there are only 15 different values, and in fact six of them are belo
 
 ```{r sold graphs, echo=FALSE}
 main <- main %>% mutate(units_sold = ifelse(units_sold<10, 10, units_sold))
-main %>% ggplot(aes(units_sold))+geom_bar()
+main %>% ggplot(aes(factor(units_sold)))+geom_bar()
 ```
 
 #### *product_id*
@@ -237,7 +237,7 @@ So we are going to examine an example of a duplicated *product_id* (ex. "5577faf
 
 ```{r exam dup}
 main %>% group_by(product_id) %>% summarize(n=n()) %>% arrange(desc(n))
-main %>% filter(product_id=="5577faf03cef83230c39d0c3")
+main %>% filter(product_id=="5577faf03cef83230c39d0c3") %>% dplyr::select(-merchant_name)
 ```
 
 We can see that the almost every column acquires the same value, except for *has_urgency_banner*. Thus we can easily deduce that during the month, this feature was changed for the *product_id* and a new row was created. As the impact is minimal and we do not know which of the rows was active during most of the month, we will just simply delete the duplicated rows as:
@@ -246,9 +246,11 @@ We can see that the almost every column acquires the same value, except for *has
 main <- distinct(main, product_id, .keep_all = TRUE)
 ```
 
-### 2.1.2. Assigning classes to features
+### 2.1.2. Assigning classes to features and calculating % stars rating instead of total count
 
 Now we have studied the variability of the features that had a class "character" and reassigned them the class "factor" for the algorithms to work better, a few more predictors that acquire few different values are assigned to factor as well. We also saw that some features acquired either a 0 or a 1, so we will change this to logical class. 
+
+For the columns of rating_X_count, instead of keeping the total count, we will keep the percentage by dividing for each * by the total counts.
 
 ```{r classes}
 main <- main %>% mutate(currency_buyer=as.factor(currency_buyer),
@@ -262,6 +264,18 @@ main <- main %>% mutate(currency_buyer=as.factor(currency_buyer),
                         has_urgency_banner=as.logical(has_urgency_banner),
                         merchant_has_profile_picture=as.logical(merchant_has_profile_picture),
                         inventory_total=as.factor(inventory_total))
+
+main <- main %>% mutate(rating_five_count=rating_five_count/rating_count,
+                        rating_four_count=rating_four_count/rating_count,
+                        rating_three_count=rating_three_count/rating_count,
+                        rating_two_count=rating_two_count/rating_count,
+                        rating_one_count=rating_one_count/rating_count)
+
+main <- main %>% mutate(rating_five_count=ifelse(is.na(rating_five_count),0,rating_five_count),
+                        rating_four_count=ifelse(is.na(rating_four_count),0,rating_four_count),
+                        rating_three_count=ifelse(is.na(rating_three_count),0,rating_three_count),
+                        rating_two_count=ifelse(is.na(rating_two_count),0,rating_two_count),
+                        rating_one_count=ifelse(is.na(rating_one_count),0,rating_one_count))
 ```
 
 ### 2.1.3. Introducing tags model
@@ -305,3 +319,326 @@ main_m <- main_m %>% dplyr::select(price, retail_price, units_sold, uses_ad_boos
                  has_urgency_banner, origin_country, merchant_rating_count, merchant_rating,
                  merchant_has_profile_picture, product_id, n_tags)
 ```
+
+### 2.1.4. Predictors that do not vary across sample
+
+We are going to do a quick check on predictors that maintain close to the same value across all the sample to evaluate if we want to disregard them. We will use:
+
+```{r no_var}
+no_var <- nearZeroVar(main_m, saveMetrics = TRUE)
+no_var[no_var[,"zeroVar"] + no_var[,"nzv"] > 0, ] 
+```
+
+As we can see, there are no predictors with zero variance, but there are 5 predictors with near zero variance. For those five, only *inventory_total* is unique for the 74.5% of the *product_id*, the rest have higher variance. As we are not sure how having a low value in this column might impact the units sold, we decide to still keep all of them.
+
+### 2.1.5. Adding *perc_price* column
+
+From the dataset we see that we have a *price* column, and a *retail_price* column. *Price* is the price for which the product is being sold in the platform, and *retail_price* is the price that similar products have in the same or in other platforms, we can say, a benchmark price. To include any possible sales effect, we add a new column that measures if the price is higher or lower than average.
+
+```{r perc_price}
+main_m <- main_m %>% mutate(perc_price=(price-retail_price)/retail_price)
+```
+
+### 2.1.6. Studying correlation between variables
+
+To study correlation between variables we are going to do two different plots. First, we will do the correlation matrix for the numeric variables.
+
+```{r cor}
+main_m.cor <- main_m %>% mutate(units_sold=as.numeric(units_sold)) %>%
+  dplyr::select_if(is.numeric) %>%
+  cor(.)
+corrplot(main_m.cor)
+```
+
+We can see that the units sold are highly affected by the total number of ratings, thus by the count of ratings for every star, but we cannot see a high relation for more units sold with a higher rating or higher % of five star ratings. As well, there is a correlation with the number of ratings for the merchant and its rating. There is also a slight positive correlation with the *product_variation_inventory* variable.
+
+To study correlation between non numerical variables, we will perform a Chi-squared test of independence, looking at the p-values. We can say that two different variables are independent if the probability distribution of one is not affected by the presence of the other.
+
+In this case, the null hypotheses is that the variables are independent from the units sold. With a significance level of 0.05, we will test the hypotheses of them being independent.
+
+```{r chisq}
+main_m.chisq <- main_m %>%
+  dplyr::select_if(function(col) is.character(col) | 
+              is.factor(col) | is.logical(col) |
+              all(col == .$units_sold)) %>% dplyr::select(-product_id)
+
+columns <- 1:ncol(main_m.chisq)
+vars <- names(main_m.chisq)[columns]
+out <-  apply( combn(columns,2),2,function(x){
+  chisq.test(table(main_m.chisq[,x[1]],main_m.chisq[,x[2]]),correct=F)$p.value
+})
+
+out <- cbind(as.data.frame(t(combn(vars,2))),out)
+out_dep <- out %>% filter(V1=="units_sold") %>% filter(out<0.05) %>%arrange(out)
+out_dep
+```
+
+We can see that we get p-values below 0.05 for 6 variables, thus, we can reject in these cases the null hypothesis and assume that these are not independent to units_sold. 
+
+Also, we can assume that these 7 other predictors are independent and do not affect the output of the units sold. We will be able to check on this when we study the variable importance of the machine learning algorithms.
+
+```{r independent}
+out_ind <- out %>% filter(V1=="units_sold") %>% filter(out>=0.05) %>% arrange(out)
+out_ind
+```
+
+### 2.2. Checking predictors effect - graphs
+
+In this section we will show different graphs with the relationship between units sold and other predictors.
+
+**product_color**
+
+```{r color graph, echo=FALSE}
+main_m %>% 
+ggplot(aes(fct_infreq(product_color), units_sold)) + geom_bar(stat = "identity") +
+  ggtitle("Product Color") + xlab("product_color")
+```
+
+**product_size_id**
+
+```{r size graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(fct_infreq(product_variation_size_id), units_sold)) + geom_bar(stat = "identity") +
+   ggtitle("Product Size") + xlab("product_size_id")
+```
+
+**price**
+
+```{r price graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(price, units_sold)) + geom_smooth() +
+  ggtitle("Price") + xlab("price")
+```
+
+**perc_price**
+
+```{r perc_price graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(perc_price, units_sold)) + geom_smooth() +
+  ggtitle("Percentage price") + xlab("perc_price")
+```
+
+**uses_ad_boosts**
+
+```{r ad_boosts graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(uses_ad_boosts, as.numeric(units_sold))) + geom_bar(stat="identity") +
+  ggtitle("Uses Ad boosts") + ylab("units_sold")
+```
+
+**5 star %**
+
+```{r 5star graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(rating_five_count, units_sold)) + geom_smooth() +
+  ggtitle("Percentage of 5 stars") + xlab("perc 5*")
+```
+
+**1 star %**
+
+```{r 5star graph, echo=FALSE}
+main_m %>% 
+  ggplot(aes(rating_one_count, units_sold)) + geom_smooth() +
+  ggtitle("Percentage of 1 star") + xlab("perc 1*")
+```
+
+Lastly, as we commented before, we change the class of *units_sold* to factor, so that it is categorical.
+
+```{r factor}
+levels <- c("10", "50", "100", "1000", "5000", "10000", "20000", "50000", "1e+05")
+main_p <- main_m %>% mutate(units_sold = factor(units_sold, levels=levels))
+```
+
+## 2.3. Creation of train and test set
+
+We split our data into a train set where we run the algorithms, and a test set to test the results and see how good our algorithm did. Test set will have 15% of the data and train set 85%. Our train set consists of 1138 rows and test set of 203 rows.
+
+```{r train test}
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(main_m$units_sold, times=1, p=0.15, list=FALSE)
+train_set <- main_p[-test_index,] %>% dplyr::select(-product_id)
+test_set <- main_p[test_index,] %>% dplyr::select(-product_id) 
+```
+
+## 2.4. Machine Learning algorithms
+
+### 2.4.1. GAM Loess
+
+Gam Loess is a Generalized Additive Model that keeps the inspiration of Linear Models but incorporating non-linear forms. The model uses smooth functions of the predictors, and the loess function is used to fit. The loess function acts as a local regression as fitting at point x is weighted toward the data closest to x. The data considered from x is controlled by the *span* argument, and represents the percentage of data that will be taken into account.
+
+To optimize the *span* argument, we will use repeated cross validation. 
+
+Repeated Cross-Validation has two different values, *number* and *repeats*. *Number* means the times we ramdonly divide our data into, so in this case, we will created 3 different sets to test results while training the model in the other 2. *Repeats* means that we will repeat 4 times the process for each partition, and it will calcuate the average. 
+
+We only divide into 3 different sets due to the small amount of data we have.
+
+```{r train gam}
+set.seed(1, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number = 3, repeats = 4, savePredictions = "all")
+grid_loess <- expand.grid(span=seq(0.2,0.9,0.2), degree=1)
+train_loess <- train(units_sold ~ ., data=train_set, method="gamLoess", trControl=control, tuneGrid=grid_loess)
+train_loess
+ggplot(train_loess, highlight = TRUE)
+```
+
+So best *span* in this case is 0.6, and we only get an accuracy of 0.05139. If we tried guessing, the probability of being correct would be 1/9 = 0.11. So we would do better just by guessing! It even gets worse when predicting in the test_set, as we can see in the table below.
+
+```{r test gam}
+y_loess <- predict(train_loess, test_set, type="raw")
+acc_loess <- confusionMatrix(y_loess, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- tibble(method = "Gam Loess", Accuracy_Train = max(train_loess$results$Accuracy), Accuracy_Test = acc_loess)
+acc_results
+```
+
+### 2.4.2. K nearest neighbors
+
+Now we will use the method of k-nearest neighbors. This method relies on the assumption that similar features will provide the same output. The model equals "similar features" to closeness in distance.
+
+In this case, we need to optimize the *k* argument, which indicates the number of neighbors to include in every calculation. We use as well repeated cross-validation to find the optimal *k*.
+
+```{r train knn}
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+train_knn <- train(units_sold ~ ., data=train_set, method="knn", tuneGrid = data.frame(k=seq(3, 40, 2)), trControl=control)
+ggplot(train_knn, highlight = TRUE)
+```
+
+In this case, we get the higher accuracy with a k=5. In that case, the accuracy in the train_set is 0.5074. Now we are doing better than guessing. Let's check our results in the test_set. 
+
+```{r test knn}
+y_knn <- predict(train_knn, test_set, type="raw")
+acc_knn <- confusionMatrix(y_knn, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="KNN", Accuracy_Train = max(train_knn$results$Accuracy),
+                                    Accuracy_Test = acc_knn))
+acc_results
+```
+
+It gets even better, now we predict correctly more than half of the units sold.
+
+### 2.4.3. Neural networks
+
+In this section, we introduce a Machine Learning algorithm that we did not study during the course, but that is very powerful and easy to understand. It is inspired in replicating the way of working of the neurons in the brain.  
+
+neural network: ![](neural.png)
+
+Using the *caret* package, we can optimize now two different parameters: *size* and *decay*. *Size* is the number of units in hidden layer and *decay* is a parameter of regularization to avoid over-fitting that can vary between 0 (default) and 1.
+
+We will try with sizes going from 4 to 20 and decays from 0.05 to 0.5, and a few minutes later we get the results.
+
+```{r train nnet1}
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+grid_nnet1 <- expand.grid(size=seq(4,20,4), decay=seq(0.05, 0.5, 0.02))
+train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet1)
+ggplot(train_nnet1, highlight = TRUE)
+```
+
+We see that the best results are for size=8 and decay=0.49, which provides an accuracy on train_set of 0.58193. Looks like we are improving!
+
+Now we will run again the code but focusing on sizes from 4 to 8 and decays from 0.4 to 0.6 to see if we can get a higher accuracy.
+
+```{r train nnet2}
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+grid_nnet2 <- expand.grid(size=seq(4,8,2), decay=seq(0.4, 0.6, 0.02))
+train_nnet2 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet2)
+ggplot(train_nnet2, highlight = TRUE)
+```
+
+And the best results are for size=6 and decay=0.6, providing an accuracy of 0.58782. So now, we will use this train_nnet2 model to predict the results in the test set. 
+
+```{r test nnet2}
+y_nnet <- predict(train_nnet2, test_set, type="raw")
+acc_nnet <- confusionMatrix(y_nnet, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Neural Network", Accuracy_Train = max(train_nnet2$results$Accuracy),
+                                    Accuracy_Test = acc_nnet))
+acc_results
+```
+
+And we see an improvement as well! Now we are over 0.59 of accuracy on the test set.
+
+### 2.4.4. Classification Trees
+
+In this section we will use the classification trees model. This is a very intuitive model that is highly used for categorical problems. 
+
+The idea is to create a decision tree, with cut points so that, when applied in a hierarchical way, lead to the final output.
+
+*Caret* package allows us to optimize the *cp* parameter via tuneGrid. *cp* is the complexity parameter of the tree and its default is 0. It helps decide the depth of the tree by not continuing building the tree if the improvement does not meet the criteria.
+
+Firstly, we will use default values to train the model, with regular cross-validation for computer optimization purposes. Also we need to change the levels name of the *units_sold* parameter for the function to not throw and error message.
+
+```{r train default rpart}
+levels(train_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X05")
+levels(test_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X05")
+
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "cv", number=4, classProbs = TRUE)
+train_rpart0 <- train(units_sold ~ ., data=train_set, method="rpart", trControl=control)
+ggplot(train_rpart0, highlight = TRUE)
+```
+
+We see that the optimal value for cp in this case is for cp=0.07196, which provides an accuracy of 0.61248.
+To visualize the tree, we will use the fancyRpartPlot from {rattle} library. We can see that it is actually quite simple, and that only one feature, *rating_count*, is used to make the predictions! Also, we can see the variable importance. 
+
+```{r train rpart0 tree}
+fancyRpartPlot(train_rpart0$finalModel, sub = NULL)
+train_rpart0$finalModel$variable.importance
+```
+
+For the purpose of predicting using the model and be able to compare results, we will use it to predict and get accuracy on test set.
+
+```{r test rpart0 tree, echo=FALSE}
+y_rpart0 <- predict(train_rpart0, test_set, type="raw")
+acc_rpart0 <- confusionMatrix(y_rpart0, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Regression Trees not optimised", Accuracy_Train = max(train_rpart0$results$Accuracy),
+                                    Accuracy_Test = acc_rpart0))
+acc_results
+```
+
+Now we will use tuneGrid to try different values of cp that range from 0 to 0.05, as it seems to be the area with the higher accuracy values. *Minsplit* will be held constant at 15. 
+
+```{r train rpart1 tree}
+set.seed(2007, sample.kind = "Rounding")
+control1 <- trainControl(method = "cv", number=4, classProbs = TRUE)
+train_rpart1 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.05, len = 25)), control=rpart::rpart.control(minsplit=15), trControl=control1)
+ggplot(train_rpart1, highlight = TRUE)
+```
+
+We now get a higher accuracy of 0.68542 with a cp=0.010416, mainly due to the variation of the *minsplit* parameter. Now that we have optimized cp, we will try different minsplit numbers to optimize the model. 
+
+```{r train minsplit tree}
+cp <- train_rpart1$bestTune$cp
+minsplit <- seq(10, 40, len=8)
+acc <- sapply(minsplit, function(ms){
+  train(units_sold ~ ., method = "rpart", data = train_set, tuneGrid = data.frame(cp=cp),
+        control=rpart::rpart.control(minsplit=ms))$results$Accuracy })
+qplot(minsplit, acc)
+minsplit[which.max(acc)]
+max(acc)
+minsplit <- minsplit[which.max(acc)]
+```
+
+Great, for a minsplit=18.57 of we get an accuracy of 0.6906. Let's now train a new model with the optimized cp and minsplit values and plot the new tree.
+
+We see now that the tree gets more decision points, but still is suprising, only the feature *rating_count* is taken into consideration. 
+
+```{r train opt tree}
+train_rpart2 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = cp), control=rpart::rpart.control(minsplit=minsplit), trControl=control1)
+fancyRpartPlot(train_rpart2$finalModel, sub = NULL)
+train_rpart2$finalModel$variable.importance
+```
+
+The accuracy we get with this model in the train set is 0.68895, higher than in the previous tree ones, so this is the one we will use for predictions.
+
+```{r test opt tree}
+y_rpart2 <- predict(train_rpart2, test_set, type="raw")
+acc_rpart2 <- confusionMatrix(y_rpart2, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Regression Trees Optimized", Accuracy_Train = max(train_rpart2$results$Accuracy),
+                                    Accuracy_Test = acc_rpart2))
+```
+
+### 2.4.5. Random Forest

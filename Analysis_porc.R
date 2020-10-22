@@ -118,12 +118,12 @@ main <- main %>% mutate(
     TRUE ~ "other"
   )))
 
+table(main$origin_country) %>% sort(decreasing = TRUE)
 main %>% ggplot(aes(origin_country))+geom_bar()
+
 
 #check variability for shipping_option_name and make adjustments
 #this is ommited in the report as this feature variability is 0
-table(main$origin_country) %>% sort(decreasing = TRUE)
-
 main <- main %>% mutate(
   shipping_option_name=as.factor(case_when(
     shipping_option_name == "Livraison standard" | shipping_option_name == "Standard Shipping" ~ "Standard Shipping",
@@ -137,7 +137,7 @@ n_distinct(main$currency_buyer)
 table(main$units_sold) %>% sort(decreasing = TRUE)
 
 main <- main %>% mutate(units_sold = ifelse(units_sold<10, 10, units_sold))
-main %>% ggplot(aes(units_sold))+geom_bar()
+main %>% ggplot(aes(factor(units_sold)))+geom_bar()
 
 #delete duplicated rows via product_id
 n_distinct(main$product_id)
@@ -145,6 +145,19 @@ n_distinct(main$product_id)
 main %>% group_by(product_id) %>% summarize(n=n()) %>% arrange(desc(n))
 main %>% filter(product_id=="5577faf03cef83230c39d0c3")
 main <- distinct(main, product_id, .keep_all = TRUE) #delete duplicated rows
+
+#change rating star counts per percentage over totals
+main <- main %>% mutate(rating_five_count=rating_five_count/rating_count,
+                        rating_four_count=rating_four_count/rating_count,
+                        rating_three_count=rating_three_count/rating_count,
+                        rating_two_count=rating_two_count/rating_count,
+                        rating_one_count=rating_one_count/rating_count)
+
+main <- main %>% mutate(rating_five_count=ifelse(is.na(rating_five_count),0,rating_five_count),
+                        rating_four_count=ifelse(is.na(rating_four_count),0,rating_four_count),
+                        rating_three_count=ifelse(is.na(rating_three_count),0,rating_three_count),
+                        rating_two_count=ifelse(is.na(rating_two_count),0,rating_two_count),
+                        rating_one_count=ifelse(is.na(rating_one_count),0,rating_one_count))
 
 # 2.1.2.
 #convert variables to logical or factor classes
@@ -199,16 +212,17 @@ no_var[no_var[,"zeroVar"] + no_var[,"nzv"] > 0, ]
 #we add column with difference % between price and retail_price
 main_m <- main_m %>% mutate(perc_price=(price-retail_price)/retail_price)
 
+#correlation matrix
 main_m.cor <- main_m %>% mutate(units_sold=as.numeric(units_sold)) %>%
-  select_if(is.numeric) %>%
+  dplyr::select_if(is.numeric) %>%
   cor(.)
 
 corrplot(main_m.cor)
 
 main_m.chisq <- main_m %>%
-  select_if(function(col) is.character(col) | 
+  dplyr::select_if(function(col) is.character(col) | 
               is.factor(col) | is.logical(col) |
-              all(col == .$units_sold)) %>% select(-product_id)
+              all(col == .$units_sold)) %>% dplyr::select(-product_id)
 
 columns <- 1:ncol(main_m.chisq)
 vars <- names(main_m.chisq)[columns]
@@ -217,125 +231,142 @@ out <-  apply( combn(columns,2),2,function(x){
 })
 
 out <- cbind(as.data.frame(t(combn(vars,2))),out)
-out <- out %>% filter(V1=="units_sold") %>% filter(out<0.05) %>%arrange(out)
-
+out_dep <- out %>% filter(V1=="units_sold") %>% filter(out<0.05) %>% arrange(out)
+out_ind <- out %>% filter(V1=="units_sold") %>% filter(out>=0.05) %>% arrange(out)
 
 #units_sold vs product_color
 main_m %>% 
-ggplot(aes(fct_infreq(product_color), units_sold)) + geom_bar(stat = "identity")
+ggplot(aes(fct_infreq(product_color), units_sold)) + geom_bar(stat = "identity") +
+  ggtitle("Product Color") + xlab("product_color")
 
 #units_sold vs product_size_id
 main_m %>% 
-  ggplot(aes(fct_infreq(product_variation_size_id), units_sold)) + geom_bar(stat = "identity")
+  ggplot(aes(fct_infreq(product_variation_size_id), units_sold)) + geom_bar(stat = "identity") +
+   ggtitle("Product Size") + xlab("product_size_id")
 
 #units_sold vs price
 main_m %>% 
-  ggplot(aes(price, units_sold)) + geom_smooth()
+  ggplot(aes(price, units_sold)) + geom_smooth() +
+  ggtitle("Price") + xlab("price")
 
 #units_sold vs perc_price
 main_m %>% 
-  ggplot(aes(perc_price, units_sold)) + geom_smooth()
+  ggplot(aes(perc_price, units_sold)) + geom_smooth() +
+  ggtitle("Percentage price") + xlab("perc_price")
 
-#CHECK!!
 #units_sold vs uses_ad_boost
 main_m %>% 
-  ggplot(aes(uses_ad_boosts, units_sold)) + geom_violin()
+  ggplot(aes(uses_ad_boosts, as.numeric(units_sold))) + geom_bar(stat="identity") +
+  ggtitle("Uses Ad boosts") + ylab("units_sold")
 
-levels <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X1e05")
-main_p <- main_m %>% mutate(units_sold = factor(units_sold, levels=levels))
+#units_sold vs % five star
+main_m %>% 
+  ggplot(aes(rating_five_count, units_sold)) + geom_smooth() +
+  ggtitle("Percentage of 5 stars") + xlab("perc 5*")
+
+#units_sold vs % one star
+main_m %>% 
+  ggplot(aes(rating_one_count, units_sold)) + geom_smooth() +
+  ggtitle("Percentage of 1 star") + xlab("perc 1*")
+
+
+levels <- c("10", "50", "100", "1000", "5000", "10000", "20000", "50000", "1e+05")
+main_p <- main_m %>% mutate(units_sold = factor(units_sold, levels=levels)) 
+
 
 
 #MACHINE LEARNING
 #split into train and test set
 set.seed(1, sample.kind = "Rounding")
 test_index <- createDataPartition(main_m$units_sold, times=1, p=0.15, list=FALSE) #Test set is 15% of our data
-train_set <- main_p[-test_index,] %>% select(-product_id)
-test_set <- main_p[test_index,] %>% select(-product_id) 
+train_set <- main_p[-test_index,] %>% dplyr::select(-product_id)
+test_set <- main_p[test_index,] %>% dplyr::select(-product_id) 
 
 
-#2 gam loess - #check optimization
+#2 gam loess
+set.seed(1, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number = 3, repeats = 4, savePredictions = "all")
-grid_loess <- expand.grid(span=seq(0.2,0.9,0.2), degree=seq(1,3,1))
+grid_loess <- expand.grid(span=seq(0.2,0.9,0.2), degree=1)
 train_loess <- train(units_sold ~ ., data=train_set, method="gamLoess", trControl=control, tuneGrid=grid_loess)
-span <- train_loess$bestTune$span
-varImp(train_loess) #error
-ggplot(train_loess, highlight = TRUE) #no tuning parameters
+ggplot(train_loess, highlight = TRUE)
+
 y_loess <- predict(train_loess, test_set, type="raw")
 acc_loess <- confusionMatrix(y_loess, test_set$units_sold)$overall[['Accuracy']]
-acc_results <- bind_rows(acc_results,
-                         data_frame(method="GamLoess",
-                                    Accuracy = acc_loess))
+acc_results <- tibble(method = "Gam Loess", Accuracy_Train = max(train_loess$results$Accuracy), Accuracy_Test = acc_loess)
 
 
-#4 k-nearest neighbor
+#4 k-nearest neighbors
 set.seed(2007, sample.kind = "Rounding")
-control <- trainControl(method = "repeatedcv", number=4, repeats=4)
-train_knn <- train(units_sold ~ ., data=train_set, method="knn", tuneGrid = data.frame(k=seq(3, 71, 2)), trControl=control)
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+train_knn <- train(units_sold ~ ., data=train_set, method="knn", tuneGrid = data.frame(k=seq(3, 40, 2)), trControl=control)
 ggplot(train_knn, highlight = TRUE)
-train_knn$results
-train_knn$finalModel
-k <- train_knn$bestTune
+
 y_knn <- predict(train_knn, test_set, type="raw")
 acc_knn <- confusionMatrix(y_knn, test_set$units_sold)$overall[['Accuracy']]
-acc_results <- tibble(method = "KNN", Accuracy = acc_knn)
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="KNN", Accuracy_Train = max(train_knn$results$Accuracy),
+                                    Accuracy_Test = acc_knn))
 
 
 #5 Neural Network
 set.seed(2007, sample.kind = "Rounding")
-control <- trainControl(method = "repeatedcv", number=4, repeats=2)
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
 grid_nnet1 <- expand.grid(size=seq(4,20,4), decay=seq(0.05, 0.5, 0.02))
-train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet)
+train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet1)
 ggplot(train_nnet1, highlight = TRUE)
-train_nnet1
-train_nnet1$bestTune
 
-grid_nnet2 <- expand.grid(size=seq(4,7,1), decay=seq(0.3, 0.5, 0.01))
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+grid_nnet2 <- expand.grid(size=seq(4,8,2), decay=seq(0.4, 0.6, 0.02))
 train_nnet2 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet2)
 ggplot(train_nnet2, highlight = TRUE)
-train_nnet2
-train_nnet2$bestTune
 
-#Model chosen is train_nnet1 as it gets better accuracy (size=4 and decay=0.47)
-y_nnet <- predict(train_nnet1, test_set, type="raw")
+#Model chosen is train_nnet2 as it gets better accuracy (size=6 and decay=0.6)
+y_nnet <- predict(train_nnet2, test_set, type="raw")
 acc_nnet <- confusionMatrix(y_nnet, test_set$units_sold)$overall[['Accuracy']]
-acc_results <- tibble(method = "NNET", Accuracy = acc_nnet)
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Neural Network", Accuracy_Train = max(train_nnet2$results$Accuracy),
+                                    Accuracy_Test = acc_nnet))
 
 
 #7.1 Classification trees regular values
+levels(train_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X05")
+levels(test_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X05")
+
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "cv", number=4, classProbs = TRUE)
-train_rpart1 <- train(units_sold ~ ., data=train_set, method="rpart", trControl=control)
-ggplot(train_rpart1, highlight = TRUE)
-fancyRpartPlot(train_rpart1$finalModel, sub = NULL)
-plot(train_rpart1$finalModel, margin = 0.3) 
-text(train_rpart1$finalModel, cex = 0.4)
-train_rpart1$finalModel$variable.importance
-y_rpart1 <- predict(train_rpart1, test_set, type="raw")
-acc_rpart1 <- confusionMatrix(y_rpart1, test_set$units_sold)$overall[['Accuracy']]
-acc_results <- bind_rows(acc_results,
-                         data_frame(method="Regression Trees not optimised",
-                                    Accuracy = acc_rpart1))
+train_rpart0 <- train(units_sold ~ ., data=train_set, method="rpart", trControl=control)
+ggplot(train_rpart0, highlight = TRUE)
+fancyRpartPlot(train_rpart0$finalModel, sub = NULL)
 
-#7 Regression trees optimising cp and minsplit
-train_rpart <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.05, len = 25)), control=rpart::rpart.control(minsplit=15))
-ggplot(train_rpart, highlight = TRUE)
-cp <- train_rpart$bestTune$cp
-minsplit <- seq(10, 40, len=5)
+train_rpart0$finalModel$variable.importance
+y_rpart0 <- predict(train_rpart0, test_set, type="raw")
+acc_rpart0 <- confusionMatrix(y_rpart0, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Regression Trees not optimised", Accuracy_Train = max(train_rpart0$results$Accuracy),
+                                    Accuracy_Test = acc_rpart0))
+
+#7 Classification trees optimising cp and minsplit
+set.seed(2007, sample.kind = "Rounding")
+control1 <- trainControl(method = "cv", number=4, classProbs = TRUE)
+train_rpart1 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.05, len = 25)), control=rpart::rpart.control(minsplit=15), trControl=control1)
+ggplot(train_rpart1, highlight = TRUE)
+cp <- train_rpart1$bestTune$cp
+minsplit <- seq(10, 40, len=8)
 acc <- sapply(minsplit, function(ms){
   train(units_sold ~ ., method = "rpart", data = train_set, tuneGrid = data.frame(cp=cp),
-        control=rpart::rpart.control(minsplit=ms))$results$Accuracy })
+        control=rpart::rpart.control(minsplit=ms), trControl=control1)$results$Accuracy })
 qplot(minsplit, acc)
 minsplit <- minsplit[which.max(acc)]
-train_rpart2 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = cp), control=rpart::rpart.control(minsplit=minsplit))
+train_rpart2 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = cp), control=rpart::rpart.control(minsplit=minsplit), trControl=control1)
 fancyRpartPlot(train_rpart2$finalModel, sub = NULL)
-plot(train_rpart2$finalModel, margin = 0.3) 
-text(train_rpart2$finalModel, cex = 0.4)
 train_rpart2$finalModel$variable.importance
+
 y_rpart2 <- predict(train_rpart2, test_set, type="raw")
 acc_rpart2 <- confusionMatrix(y_rpart2, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
-                         data_frame(method="Regression Trees Optimized",
-                                    Accuracy = acc_rpart2))
+                         data_frame(method="Regression Trees Optimized", Accuracy_Train = max(train_rpart2$results$Accuracy),
+                                    Accuracy_Test = acc_rpart2))
 
 #8.1 Random Forest default values
 train_rf <- train(units_sold ~ ., data=train_set, method="rf")
@@ -418,7 +449,7 @@ acc_results <- bind_rows(acc_results,
 
 #10 H20
 library(h2o)
-main_h2o <- main_p %>% select(-product_id)
+main_h2o <- main_p %>% dplyr::select(-product_id)
 h2o.init()
 data_h2o <- as.h2o(train_set)
 test_h2o <- as.h2o(test_set)
