@@ -1,7 +1,7 @@
 ---
 title: "Product sales prediction"
 author: "Beatriz Estrella"
-date: "12/10/2020"
+date: "25/10/2020"
 output: pdf_document
 ---
 
@@ -15,7 +15,7 @@ options(tinytex.verbose = TRUE)
 
 The motivation of this project is to complete the task of the course in Data Science: Capstone from HarvardX, course PH125.9x, under the *Choose your own!* project submission.
 
-The project aims to predict the units sold for each specific product. The database was downloaded from - [Kaggle](https://www.kaggle.com/jmmvutu/summer-products-and-sales-in-ecommerce-wish) and consists of data from platform [wish](https://www.wish.com). *Wish* is a retailer that sells millions of product to customer in a e-commerce marketplace. The data consists of the products under the tag "summer" showed during August 2020.
+The project aims to predict the units sold for each specific product. The database was downloaded from - [Kaggle](https://www.kaggle.com/jmmvutu/summer-products-and-sales-in-ecommerce-wish) and consists of data from platform [wish](https://www.wish.com). *Wish* is a retailer that sells millions of product to customers in a e-commerce marketplace. The data consists of the products under the tag "summer" showed during August 2020.
 
 We want to see which features can predict the units that will be sold in a specific product, and the accuracy that we get under the different machine learning algorithms. 
 
@@ -26,6 +26,17 @@ Apart from the main dataset (stored as data frame in main variable), we have a s
 Datasets, .R code and all relevant documentation regarding this project can be found online at [github.com/beatrizeg/Wish-Units-Solds](https://github.com/beatrizeg/Wish-Units-Solds).
 
 ```{r load Data and libraries, echo=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(stringr)) install.packages("stringr", repos = "http://cran.us.r-project.org")
+if(!require(purrr)) install.packages("purrr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+if(!require(forcats)) install.packages("forcats", repos = "http://cran.us.r-project.org")
+if(!require(rattle)) install.packages("rattle", repos = "http://cran.us.r-project.org")
+if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+if(!require(klaR)) install.packages("klaR", repos = "http://cran.us.r-project.org")
+
 library(tidyverse)
 library(stringr)
 library(purrr)
@@ -37,20 +48,16 @@ library(rattle)
 library(xgboost)
 library(klaR)
 
+#loading databases
 url_main <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/summer-products-with-rating-and-performance_2020-08.csv"
 dest_file <- "data/main.csv"
 download.file(url_main, destfile = dest_file)
 main <- read_csv("data/main.csv")
-save(main, file = "rdas/main.rda")
 
 url_cat <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/unique-categories.sorted-by-count.csv"
 dest_file_cat <- "data/cat.csv"
 download.file(url_cat, destfile = dest_file_cat)
 cat <- read_csv("data/cat.csv")
-save(cat, file = "rdas/cat.rda")
-
-load("rdas/main.rda")
-load("rdas/cat.rda")
 
 main <- as.data.frame(main)
 cat <- as.data.frame(cat)
@@ -60,7 +67,7 @@ cat <- as.data.frame(cat)
 
 Now we proceed to inspect the main dataset that is directly downloaded from Kaggle. Using the dim and summary functions we see:
 
-```{r inspect}
+```{r inspect, tidy=TRUE}
 dim(main)
 summary(main)
 ```
@@ -77,7 +84,16 @@ apply(main, 2, function(x) any(is.na(x)))
 
 So we proceed to substitute the NAs in *rating_<X>_count* columns to 0 and also the ones in the *has_urgency_banner* to 0 as 0 represents *FALSE*.
 
-We see that we still get NAs in columns *product_color*, *product_variation_size_id*, *urgency_text*, *origin_country*, *merchant_name*, *merchant_info_subtitle* and *merchant_profile_picture*, but we will deal with these later as we will see, because these features will not be included in the model, except for *product_color*, *product_variation_size_id* and *merchant_profile_picture* that will be tidied up later.
+```{r nas treat}
+main <- main %>% mutate(rating_five_count=ifelse(is.na(rating_five_count),0,rating_five_count),
+                        rating_four_count=ifelse(is.na(rating_four_count),0,rating_four_count),
+                        rating_three_count=ifelse(is.na(rating_three_count),0,rating_three_count),
+                        rating_two_count=ifelse(is.na(rating_two_count),0,rating_two_count),
+                        rating_one_count=ifelse(is.na(rating_one_count),0,rating_one_count),
+                        has_urgency_banner=ifelse(is.na(has_urgency_banner),0,has_urgency_banner))
+```
+
+We see that we still get NAs in columns *product_color*, *product_variation_size_id*, *urgency_text*, *origin_country*, *merchant_name*, *merchant_info_subtitle* and *merchant_profile_picture*, but we will deal with these later as we will see, because these features will not be included in the model, except for *product_color*, *product_variation_size_id* and *merchant_profile_picture* that will be tidied up later on.
 
 Lastly, it is important to note that the *product_id* is the unique differentiator of each product. We will see later the reason for a few of them being duplicated and solve the issue.
 
@@ -110,7 +126,6 @@ First of all we are going to study the different categories under the predictor 
 
 ```{r product_color}
 table(main$product_color) %>% sort(decreasing = TRUE)
-main %>% ggplot(aes(product_color))+geom_bar()
 ```
 
 We see that most of the categories only apply for 2 or less *products_id*, so we will group into main color categories this feature in order to provide the algorithm with more valuable data.
@@ -148,7 +163,6 @@ We are going to do the same exercise we did with the *product_color* variable wi
 
 ```{r product_size}
 table(main$product_variation_size_id) %>% sort(decreasing = TRUE)
-main %>% ggplot(aes(product_variation_size_id))+geom_bar()
 ```
 
 We again reassign the values to the main categories and again, we treat it as a categorical value, which provides much more information to the algorithms. 
@@ -183,7 +197,6 @@ main <- main %>% mutate(product_variation_size_id=
                                    TRUE ~ "other")))
 ```
 ```{r size graph}
-table(main$product_variation_size_id) %>% sort(decreasing = TRUE)
 main %>% ggplot(aes(product_variation_size_id))+geom_bar()
 ```
 
@@ -222,7 +235,7 @@ We see that there are only 15 different values, and in fact six of them are belo
 
 ```{r sold graphs, echo=FALSE}
 main <- main %>% mutate(units_sold = ifelse(units_sold<10, 10, units_sold))
-main %>% ggplot(aes(factor(units_sold)))+geom_bar()
+main %>% ggplot(aes(factor(units_sold)))+geom_bar() + xlab("units_sold")
 ```
 
 #### *product_id*
@@ -233,11 +246,10 @@ As we commented in the introduction, we can easily check that there are less uni
 n_distinct(main$product_id)
 ```
 
-So we are going to examine an example of a duplicated *product_id* (ex. "5577faf03cef83230c39d0c3") and see the differences in the rows.
+So if I examine a duplicated *product_id* (ex. "5577faf03cef83230c39d0c3") and see the differences in the rows:
 
 ```{r exam dup}
 main %>% group_by(product_id) %>% summarize(n=n()) %>% arrange(desc(n))
-main %>% filter(product_id=="5577faf03cef83230c39d0c3") %>% dplyr::select(-merchant_name)
 ```
 
 We can see that the almost every column acquires the same value, except for *has_urgency_banner*. Thus we can easily deduce that during the month, this feature was changed for the *product_id* and a new row was created. As the impact is minimal and we do not know which of the rows was active during most of the month, we will just simply delete the duplicated rows as:
@@ -302,18 +314,14 @@ main_tags[,i] <- with(cat, cat_n[match(main_tags[,i], keyword)])
 
 main_tags <- as.data.frame(main_tags)
 main_tags[] <- lapply(main_tags, function(x) as.numeric(as.character(x))) 
-
 main_tags <- main_tags %>% mutate(n_tags = rowSums(main_tags, na.rm=TRUE)) %>% dplyr::select(n_tags)
-
 main_m <- bind_cols(main, main_tags)
 ```
 
 Lastly, we disregards all 41 columns that were created and keep only those that can provide relevant information *(price, retail_price, units_sold, uses_ad_boosts, rating, rating_count,  rating_five_count, rating_four_count, rating_three_count, rating_two_count, rating_one_count, badges_count, badge_local_product, badge_product_quality, badge_fast_shipping, product_color, product_variation_size_id, product_variation_inventory, shipping_option_price, shipping_is_express, countries_shipped_to, inventory_total, has_urgency_banner, origin_country, merchant_rating_count, merchant_rating, merchant_has_profile_picture, product_id, n_tags)*, disregarding also those such as *title*, *merchant_name*, *product_url*, etc.
 
 ```{r select, echo=FALSE}
-main_m <- main_m %>% dplyr::select(price, retail_price, units_sold, uses_ad_boosts, rating, rating_count, 
-                 rating_five_count, rating_four_count, rating_three_count, rating_two_count, rating_one_count,
-                 badges_count, badge_local_product, badge_product_quality, badge_fast_shipping,
+main_m <- main_m %>% dplyr::select(price, retail_price, units_sold, uses_ad_boosts, rating, rating_count, rating_five_count, rating_four_count, rating_three_count, rating_two_count, rating_one_count, badges_count, badge_local_product, badge_product_quality, badge_fast_shipping,
                  product_color, product_variation_size_id, product_variation_inventory,
                  shipping_option_price, shipping_is_express, countries_shipped_to, inventory_total,
                  has_urgency_banner, origin_country, merchant_rating_count, merchant_rating,
@@ -339,7 +347,7 @@ From the dataset we see that we have a *price* column, and a *retail_price* colu
 main_m <- main_m %>% mutate(perc_price=(price-retail_price)/retail_price)
 ```
 
-### 2.1.6. Studying correlation between variables
+## 2.2. Studying correlation between variables
 
 To study correlation between variables we are going to do two different plots. First, we will do the correlation matrix for the numeric variables.
 
@@ -382,7 +390,7 @@ out_ind <- out %>% filter(V1=="units_sold") %>% filter(out>=0.05) %>% arrange(ou
 out_ind
 ```
 
-### 2.2. Checking predictors effect - graphs
+## 2.3. Checking predictors effect - graphs
 
 In this section we will show different graphs with the relationship between units sold and other predictors.
 
@@ -393,14 +401,17 @@ main_m %>%
 ggplot(aes(fct_infreq(product_color), units_sold)) + geom_bar(stat = "identity") +
   ggtitle("Product Color") + xlab("product_color")
 ```
+Black and white are the most common colors along units sold.
 
 **product_size_id**
 
-```{r size graph, echo=FALSE}
+```{r size_id graph, echo=FALSE}
 main_m %>% 
   ggplot(aes(fct_infreq(product_variation_size_id), units_sold)) + geom_bar(stat = "identity") +
    ggtitle("Product Size") + xlab("product_size_id")
 ```
+
+XS is the most common size within units sold.
 
 **price**
 
@@ -409,14 +420,7 @@ main_m %>%
   ggplot(aes(price, units_sold)) + geom_smooth() +
   ggtitle("Price") + xlab("price")
 ```
-
-**perc_price**
-
-```{r perc_price graph, echo=FALSE}
-main_m %>% 
-  ggplot(aes(perc_price, units_sold)) + geom_smooth() +
-  ggtitle("Percentage price") + xlab("perc_price")
-```
+Prices within 5 to 10 EUR are the most common, and that high prices are not common, reason for the smooth function to cover a big area.
 
 **uses_ad_boosts**
 
@@ -425,6 +429,7 @@ main_m %>%
   ggplot(aes(uses_ad_boosts, as.numeric(units_sold))) + geom_bar(stat="identity") +
   ggtitle("Uses Ad boosts") + ylab("units_sold")
 ```
+We can see that it is more common to not use ad_boosts.
 
 **5 star %**
 
@@ -433,14 +438,16 @@ main_m %>%
   ggplot(aes(rating_five_count, units_sold)) + geom_smooth() +
   ggtitle("Percentage of 5 stars") + xlab("perc 5*")
 ```
+Here, the plot shows how most units are sold with an average of 50% of 5 star ratings.
 
 **1 star %**
 
-```{r 5star graph, echo=FALSE}
+```{r 1star graph, echo=FALSE}
 main_m %>% 
   ggplot(aes(rating_one_count, units_sold)) + geom_smooth() +
   ggtitle("Percentage of 1 star") + xlab("perc 1*")
 ```
+Opposite to the perc 5* graph, we can see that the most units are sold with a low percentage of 1 star ratings.
 
 Lastly, as we commented before, we change the class of *units_sold* to factor, so that it is categorical.
 
@@ -449,9 +456,11 @@ levels <- c("10", "50", "100", "1000", "5000", "10000", "20000", "50000", "1e+05
 main_p <- main_m %>% mutate(units_sold = factor(units_sold, levels=levels))
 ```
 
-## 2.3. Creation of train and test set
+## 2.4. Creation of train and test set
 
-We split our data into a train set where we run the algorithms, and a test set to test the results and see how good our algorithm did. Test set will have 15% of the data and train set 85%. Our train set consists of 1138 rows and test set of 203 rows.
+We split our data into a train set where we run the algorithms, and a test set to test the results and see how good our algorithm did. Test set usually consists of 10%-20% of the data. In our case, test set will have 15% of the data and train set 85%. As we do not have too much data, we do not want to compromise test set to have very few rows, or train set to not be big enough to produce good models.
+
+Our train set consists of 1138 rows and test set of 203 rows.
 
 ```{r train test}
 set.seed(1, sample.kind = "Rounding")
@@ -460,9 +469,15 @@ train_set <- main_p[-test_index,] %>% dplyr::select(-product_id)
 test_set <- main_p[test_index,] %>% dplyr::select(-product_id) 
 ```
 
-## 2.4. Machine Learning algorithms
+## 2.5. Method
 
-### 2.4.1. GAM Loess
+The method will be to train different Machine Learning algorithms, that are included in *caret* package. We will train the models using only the train_set, while repeated cross-validation or simple cross-validation will be used to optimize the hyperparameters of each model. Once the model is optimized using only the train_set, results will be tested in test_set.
+
+As well, *h2o* package will be used at the end, to check which is the best performer model and compare results.
+
+# 3. RESULTS
+
+## 3.1. GAM Loess
 
 Gam Loess is a Generalized Additive Model that keeps the inspiration of Linear Models but incorporating non-linear forms. The model uses smooth functions of the predictors, and the loess function is used to fit. The loess function acts as a local regression as fitting at point x is weighted toward the data closest to x. The data considered from x is controlled by the *span* argument, and represents the percentage of data that will be taken into account.
 
@@ -476,12 +491,11 @@ We only divide into 3 different sets due to the small amount of data we have.
 set.seed(1, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number = 3, repeats = 4, savePredictions = "all")
 grid_loess <- expand.grid(span=seq(0.2,0.9,0.2), degree=1)
-train_loess <- train(units_sold ~ ., data=train_set, method="gamLoess", trControl=control, tuneGrid=grid_loess)
-train_loess
+train_loess <- caret::train(units_sold ~ ., data=train_set, method="gamLoess", trControl=control, tuneGrid=grid_loess)
 ggplot(train_loess, highlight = TRUE)
 ```
 
-So best *span* in this case is 0.6, and we only get an accuracy of 0.05139. If we tried guessing, the probability of being correct would be 1/9 = 0.11. So we would do better just by guessing! It even gets worse when predicting in the test_set, as we can see in the table below.
+So best *span* in this case is 0.6, and we only get an accuracy of 0.05139. If we tried guessing, the probability of being correct would be 1/9 = 0.11. So we would do better just by guessing! In fact, if we use the predict function, we see that it is just predicting the same category every time.
 
 ```{r test gam}
 y_loess <- predict(train_loess, test_set, type="raw")
@@ -490,7 +504,9 @@ acc_results <- tibble(method = "Gam Loess", Accuracy_Train = max(train_loess$res
 acc_results
 ```
 
-### 2.4.2. K nearest neighbors
+This model clearly does not work.
+
+## 3.2. K nearest neighbors
 
 Now we will use the method of k-nearest neighbors. This method relies on the assumption that similar features will provide the same output. The model equals "similar features" to closeness in distance.
 
@@ -516,7 +532,7 @@ acc_results
 
 It gets even better, now we predict correctly more than half of the units sold.
 
-### 2.4.3. Neural networks
+## 3.3. Neural networks
 
 In this section, we introduce a Machine Learning algorithm that we did not study during the course, but that is very powerful and easy to understand. It is inspired in replicating the way of working of the neurons in the brain.  
 
@@ -526,23 +542,43 @@ Using the *caret* package, we can optimize now two different parameters: *size* 
 
 We will try with sizes going from 4 to 20 and decays from 0.05 to 0.5, and a few minutes later we get the results.
 
-```{r train nnet1}
+```{r train nnet1 trainf, echo=TRUE, eval=FALSE}
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number=3, repeats=4)
 grid_nnet1 <- expand.grid(size=seq(4,20,4), decay=seq(0.05, 0.5, 0.02))
 train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet1)
+```
+
+```{r train nnet1 train, echo=FALSE, eval=TRUE }
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+grid_nnet1 <- expand.grid(size=seq(4,20,4), decay=seq(0.05, 0.5, 0.02))
+train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet1)
+```
+```{r plot nnet1, echo=TRUE}
 ggplot(train_nnet1, highlight = TRUE)
 ```
+
 
 We see that the best results are for size=8 and decay=0.49, which provides an accuracy on train_set of 0.58193. Looks like we are improving!
 
 Now we will run again the code but focusing on sizes from 4 to 8 and decays from 0.4 to 0.6 to see if we can get a higher accuracy.
 
-```{r train nnet2}
+```{r train nnet2 1, echo=TRUE, eval=FALSE}
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number=3, repeats=4)
 grid_nnet2 <- expand.grid(size=seq(4,8,2), decay=seq(0.4, 0.6, 0.02))
 train_nnet2 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet2)
+```
+
+```{r train nnet2 2, echo=FALSE, eval=TRUE}
+set.seed(2007, sample.kind = "Rounding")
+control <- trainControl(method = "repeatedcv", number=3, repeats=4)
+grid_nnet2 <- expand.grid(size=seq(4,8,2), decay=seq(0.4, 0.6, 0.02))
+train_nnet2 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet2)
+```
+
+```{r train nnet2 plot, echo=TRUE, eval=TRUE}
 ggplot(train_nnet2, highlight = TRUE)
 ```
 
@@ -559,13 +595,13 @@ acc_results
 
 And we see an improvement as well! Now we are over 0.59 of accuracy on the test set.
 
-### 2.4.4. Classification Trees
+## 3.4. Classification Trees
 
 In this section we will use the classification trees model. This is a very intuitive model that is highly used for categorical problems. 
 
 The idea is to create a decision tree, with cut points so that, when applied in a hierarchical way, lead to the final output.
 
-*Caret* package allows us to optimize the *cp* parameter via tuneGrid. *cp* is the complexity parameter of the tree and its default is 0. It helps decide the depth of the tree by not continuing building the tree if the improvement does not meet the criteria.
+*Caret* package allows us to optimize the *cp* parameter via tuneGrid. *cp* is the complexity parameter of the tree and it defaults to 0. It helps decide the depth of the tree by not continuing building the tree if the improvement does not meet the criteria.
 
 Firstly, we will use default values to train the model, with regular cross-validation for computer optimization purposes. Also we need to change the levels name of the *units_sold* parameter for the function to not throw and error message.
 
@@ -593,7 +629,7 @@ For the purpose of predicting using the model and be able to compare results, we
 y_rpart0 <- predict(train_rpart0, test_set, type="raw")
 acc_rpart0 <- confusionMatrix(y_rpart0, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
-                         data_frame(method="Regression Trees not optimised", Accuracy_Train = max(train_rpart0$results$Accuracy),
+                         data_frame(method="Classification Trees not optimised", Accuracy_Train = max(train_rpart0$results$Accuracy),
                                     Accuracy_Test = acc_rpart0))
 acc_results
 ```
@@ -631,14 +667,222 @@ fancyRpartPlot(train_rpart2$finalModel, sub = NULL)
 train_rpart2$finalModel$variable.importance
 ```
 
-The accuracy we get with this model in the train set is 0.68895, higher than in the previous tree ones, so this is the one we will use for predictions.
+The accuracy we get with this model in the train set is 0.688, higher than in the previous tree ones, so this is the one we will use for predictions.
 
 ```{r test opt tree}
 y_rpart2 <- predict(train_rpart2, test_set, type="raw")
 acc_rpart2 <- confusionMatrix(y_rpart2, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
-                         data_frame(method="Regression Trees Optimized", Accuracy_Train = max(train_rpart2$results$Accuracy),
+                         data_frame(method="Classification Trees Optimized", Accuracy_Train = max(train_rpart2$results$Accuracy),
                                     Accuracy_Test = acc_rpart2))
+acc_results
 ```
 
-### 2.4.5. Random Forest
+## 3.5. Random Forest
+
+Random Forest is a widely used algorithm, either for Classification problems (as this one), but also for continuous problems, in that case, it is called Regression Forest. Random Forest uses the technique from Decision Trees that we studied in the section above, but using a large number of different decision trees. Each decision tree in the forest provides an output, the the class that was outputed the most of the times by the decision trees, is the one that the algorithm chooses.
+
+So this model usually outperforms the decision tree model, because taking into account different trees to make the decision, disregards errors that single trees may produce.
+
+*By Venkata Jagannath - : ![](Random_forest_diagram_complete.png)
+*https://community.tibco.com/wiki/random-forest-template-tibco-spotfirer-wiki-page, CC BY-SA 4.0, https://commons.wikimedia.org/w/index.php?curid=68995764*
+
+*Caret* package allows us to optimize the *mtry* parameter via tuneGrid. *Mtry* parameter refers to the number of variables available for splitting at each tree node. A common rule to choose *mtry* in classification problems is to $mtry = \sqrt(number of predictors)$. 
+
+We will start to run a model with the default values from *caret* package.
+
+```{r train rf0}
+train_rf0 <- train(units_sold ~ ., data=train_set, method="rf")
+ggplot(train_rf0, highlight = TRUE)
+```
+
+We see that the best accuracy we get is for a mtry=33 . As we said before, in the case best mtry>number of predictors in our dataset. This is because *caret* *train* function converts the database into a matrix, and considers, as an independent predictor, each level of the categorical variables.
+
+```{r test rf0}
+y_rf0 <- predict(train_rf0, test_set, type="raw")
+acc_rf0 <- confusionMatrix(y_rf0, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Random Forest not optimized", Accuracy_Train = max(train_rf0$results$Accuracy),
+                                    Accuracy_Test = acc_rf0))
+acc_results
+```
+
+As we have 28 predictors in our database, we will try *mtry* that range from 16 to 40. As in Random Forest we already use independent trees in the model, we will use simple cross-validation in this case.
+
+```{r train rf1}
+set.seed(1234, sample.kind = "Rounding")
+control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+grid_rf <- expand.grid(mtry=seq(16,40,2))
+train_rf1 <- train(units_sold ~ ., data=train_set, method="rf", tuneGrid=grid_rf, trControl=control_rf)
+ggplot(train_rf1, highlight = TRUE)
+mtry <- train_rf1$bestTune$mtry
+```
+
+And now we get a higher accuracy of 0.7082 for a mtry=30. Once that we have optimized the *mtry* parameter, we will try with different nodesizes and see if we can get any improvement.
+
+```{r train rf2 nodesize}
+grid_mtry <- expand.grid(mtry=mtry)
+nodesize <- seq(1, 5, 2)
+acc <- sapply(nodesize, function(ns){
+  train(units_sold ~ ., method = "rf", data = train_set, tuneGrid = grid_mtry, trControl=control_rf,
+        nodesize = ns)$results$Accuracy })
+qplot(nodesize, acc)
+nodesize <- nodesize[which.max(acc)]
+max(acc)
+```
+
+Great! So the optimal nodesize=3. Now, keeping our optimal nodesize=3 and mtry=30, we will train our final model to be tested on test_set and check the results. Also, we can plot the variable importance of the model.
+
+```{r train rf2}
+train_rf2 <- train(units_sold ~ ., method = "rf", data = train_set, tuneGrid = grid_mtry, nodesize = nodesize, trControl=control_rf)
+rf2_imp <- varImp(train_rf2)
+plot(rf2_imp, top = 10)
+```
+
+
+```{r test rf2}
+y_rf <- predict(train_rf2, test_set, type="raw")
+acc_rf <- confusionMatrix(y_rf, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Random Forest optimized", Accuracy_Train = max(train_rf2$results$Accuracy),
+                                    Accuracy_Test = acc_rf))
+acc_results
+```
+
+Looks like although we were able to improve the results in the train set, actually our accuracy in the test set is the same as with the default values. In this case, the optimal values of mtry and nodesize did not really have an effect. Anyways, with Random Forest we are able now to predict correctly over three quarters of the units sold.
+
+## 3.6. XGBoost
+
+XGBoost is another model we have not studied during the course, but that is becoming very popular due to its execution speed and model performance. Also, it dominates structured datasets on classification problems. It uses the gradient boosting decision tree algorithm, which is an ensemble technique where new models are added to correct the errors made by the existing models. It keeps adding models until no improvement is achieved. 
+
+We will start by optimizing the tuneGrid hyperparameters of *eta* and *maxdepth*. To start the first model, we will keep the optimal *nodesize*=3 from Random Forest.
+
+We will vary *eta* from 0.01 to 0.3, which controls the learning rate. And *max_depth* from 4 to 10, which controls the maximum depth of the trees. If we make *max_depth* too large, we have higher chances of overfitting the model.
+
+```{r train1 xgbm}
+grid_xgbm1 <- expand.grid(min_child_weight=c(nodesize), eta=seq(0.01, 0.3, 0.05), nrounds=c(500), max_depth=seq(4,10,2), gamma=0,
+                         colsample_bytree=c(0.8), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm1 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl=control_xgbm, tuneGrid=grid_xgbm1, verbose=TRUE)
+ggplot(train_xgbm1, highlight = TRUE)
+eta <- train_xgbm1$bestTune$eta
+max_depth <- train_xgbm1$bestTune$max_depth
+```
+
+Once we have our optimized values of *eta*=0.01 and *max_depth*=8, giving an accuracy of 0.695, we will fix those values and try to optimize the *nrounds* hyperparameter. *nrounds* controls the maximum number of iterations.
+
+```{r train2 xgbm}
+grid_xgbm2 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(500,1000,1500,2000), max_depth=c(max_depth), gamma=0,
+                         colsample_bytree=c(0.8), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm2 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl=control_xgbm, tuneGrid=grid_xgbm2, verbose=TRUE)
+ggplot(train_xgbm2, highlight = TRUE)
+nrounds <- train_xgbm2$bestTune$nrounds
+```
+
+We need to keep in mind that the higher the *nrounds* number, longer the time the model needs to run. Now that we have also optimized the *nrounds* parameter to equal 500, which provides an accuracy of 0.692, we will try to improve the model by looking at different *min_child_weight* values. It means the same as *nodesize* in Random Forest.
+
+```{r train3 xgbm}
+grid_xgbm3 <- expand.grid(min_child_weight=c(1,3,5), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=0,
+                         colsample_bytree=c(0.8), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm3 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl=control_xgbm, tuneGrid=grid_xgbm3, verbose=TRUE)
+ggplot(train_xgbm3, highlight = TRUE)
+nodesize <- train_xgbm3$bestTune$min_child_weight
+```
+
+Great, we now have a new parameter optimized. With *min_child_weight*=1 we get an accuracy of 0.699. Lastly, we will see if trying a different *gamma* can improve our accuracy. *Gamma* is the regularization parameter that prevents overfitting. It defaults to 0.
+
+```{r train4 xgbm}
+grid_xgbm4 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=seq(0,5,2),
+                          colsample_bytree=c(0.8), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm4 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl=control_xgbm, tuneGrid=grid_xgbm4, verbose=TRUE)
+ggplot(train_xgbm4, highlight = TRUE)
+gamma <- train_xgbm4$bestTune$gamma
+```
+
+We can see that we get the higher accuracy of 0.701 for a gamma=2. Once that we have optimized all these parameters, we train the final model.
+
+By using the varImp function, we can plot as well the importance that the different predictors have in the model.
+
+```{r train_op xgbm}
+grid_xgbm_op <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=gamma,
+                         colsample_bytree=c(0.8), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm_op <- train(units_sold ~ ., method="xgbTree", data=train_set, tuneGrid=grid_xgbm_op, trControl=control_xgbm, verbose=TRUE)
+xgbm_imp <- varImp(train_xgbm_op)
+plot(xgbm_imp, top = 10)
+```
+
+We use our optimized model to test the results and compare with the previous models.
+
+```{r test xgbm}
+y_xgbm <- predict(train_xgbm_op, test_set, type="raw")
+acc_xgbm <- confusionMatrix(y_xgbm, test_set$units_sold)$overall[['Accuracy']]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="XGBoost", Accuracy_Train = max(train_xgbm_op$results$Accuracy),
+                                    Accuracy_Test = acc_xgbm))
+acc_results
+```
+
+With our final XGBoost model we were not able to outperform the Random Forest model.
+
+## 3.7. H2O AutoML
+
+For our last model we will use the library "h2o" and its auto Machine Learning algorithm. This algorithms runs different models (Random Forest, XGBoost, Neural Networks, etc) and specially, it also does Stacked Ensembles. Stacked Ensemble method uses more than one ML algorithm to improve performance.
+
+```{r h2o train, echo=7}
+library(h2o)
+
+h2o.init()
+data_h2o <- as.h2o(train_set)
+test_h2o <- as.h2o(test_set)
+automl_all <- h2o.automl(y=3, training_frame=data_h2o, max_runtime_secs=500,validation_frame = test_h2o,
+                            seed=1, keep_cross_validation_predictions=TRUE)
+
+automl_all_lb <- automl_all@leaderboard
+print(automl_all_lb, n=nrow(automl_all_lb))
+```
+
+In the table above, we can see the performance of the different models that were trained using h2o. We see that the best performer is a Gradient Boosting model that we did not study in the course neither was used in the previous sections.
+
+If we study the best performer model, we can see the different features it used, which were optimized by using cross-validation. 
+
+```{r leader}
+automl_all@leader
+```
+
+In the cross validation of the training data, we can see that it achieves an accuracy of 0.697. Also, we can study the variable importance of the model, and check if it matches the variable importance of the XGBoost model we performed.
+
+```{r varimp h2o}
+plot <- h2o.varimp_plot(automl_all@leader, num_of_features = 10)
+```
+
+Now, running the model in our test_set, we get an accuracy of (203-53)/203=0.7389.
+
+```{r test, echo=2:4}
+h2o_gbm <- h2o.performance(model = automl_all@leader, newdata = test_h2o)
+pred <- h2o.predict(automl_all@leader, test_h2o)
+h2o.confusionMatrix(automl_all@leader, newdata = test_h2o)
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="h2oAutoML", Accuracy_Train = 0.697,
+                                    Accuracy_Test = 0.7389))
+acc_results
+```
+Personally, I think that it is always nice to check that the autoML algorithm does not beat the work done by the data scientist, and that other methods get a higher accuracy.
+
+# 4. CONCLUSION
+
+For this multinomial problem, we have just checked how some methods work better than others. In this case, winners are Random Forest and XGBoost, as they get very similar results. If we were having a larger dataset, time would be an important factor when deciding for which method to use, and the fastest method would get chosen.
+
+Future work of this project would be running a Gradient Boost Model, which was the best performer for h2o, but optimizing its hyperparameters to see if we could improve the accuracy. 
+
+Also, all predictors have always been considered, but sometimes, it is better to disregard those that do not contribute much to the models, which actually yields into better results. As we saw, only a few predictors actually contribute to the final results, and taking this into account in our models could improve the results.
+
+
