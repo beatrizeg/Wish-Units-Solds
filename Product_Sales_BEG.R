@@ -12,6 +12,7 @@ if(!require(forcats)) install.packages("forcats", repos = "http://cran.us.r-proj
 if(!require(rattle)) install.packages("rattle", repos = "http://cran.us.r-project.org")
 if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
 if(!require(klaR)) install.packages("klaR", repos = "http://cran.us.r-project.org")
+if(!require(tictoc)) install.packages("tictoc", repos = "http://cran.us.r-project.org")
 
 library(tidyverse)
 library(stringr)
@@ -23,17 +24,18 @@ library(forcats)
 library(rattle)
 library(xgboost)
 library(klaR)
+library(tictoc)
 
 #loading databases
 url_main <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/summer-products-with-rating-and-performance_2020-08.csv"
-dest_file <- "data/main.csv"
+dest_file <- "./main.csv"
 download.file(url_main, destfile = dest_file)
-main <- read_csv("data/main.csv")
+main <- read_csv("./main.csv")
 
 url_cat <- "https://raw.githubusercontent.com/beatrizeg/Wish-Units-Solds/main/unique-categories.sorted-by-count.csv"
-dest_file_cat <- "data/cat.csv"
+dest_file_cat <- "./cat.csv"
 download.file(url_cat, destfile = dest_file_cat)
-cat <- read_csv("data/cat.csv")
+cat <- read_csv("./cat.csv")
 
 main <- as.data.frame(main)
 cat <- as.data.frame(cat)
@@ -44,8 +46,8 @@ dim(main)
 summary(main)
 
 #check for NAs
-apply(main, 2, function(x) any(is.na(x)))
-
+nas <- apply(main, 2, function(x) any(is.na(x)))
+nas[which(nas)]
 #NAs in * ratings and has_urgency_banner are substituted by 0
 main <- main %>% mutate(rating_five_count=ifelse(is.na(rating_five_count),0,rating_five_count),
                         rating_four_count=ifelse(is.na(rating_four_count),0,rating_four_count),
@@ -103,7 +105,7 @@ main <- main %>% mutate(product_variation_size_id=
                                      product_variation_size_id=="size S" |
                                      product_variation_size_id=="Size S." |
                                      product_variation_size_id=="S Pink" |
-                                     product_variation_size_id=="Suit-S"~ "XS",
+                                     product_variation_size_id=="Suit-S"~ "S",
                                    product_variation_size_id=="M" | 
                                      product_variation_size_id=="M."~ "M",
                                    product_variation_size_id=="L" | 
@@ -230,8 +232,9 @@ main_m.cor <- main_m %>% mutate(units_sold=as.numeric(units_sold)) %>%
   dplyr::select_if(is.numeric) %>%
   cor(.)
 
-corrplot(main_m.cor)
+corrplot(main_m.cor, type="lower", tl.cex = 0.5)
 
+#chisq test for categorical and logical variables
 main_m.chisq <- main_m %>%
   dplyr::select_if(function(col) is.character(col) | 
               is.factor(col) | is.logical(col) |
@@ -300,41 +303,54 @@ test_set <- main_p[test_index,] %>% dplyr::select(-product_id)
 #3. RESULTS
 
 ## 3.1. GAM Loess
+tic("GAM Loess")
 set.seed(1, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number = 3, repeats = 4, savePredictions = "all")
 grid_loess <- expand.grid(span=seq(0.2,0.9,0.2), degree=1)
 train_loess <- train(units_sold ~ ., data=train_set, method="gamLoess", trControl=control, tuneGrid=grid_loess, na.action=na.exclude)
+gam_toc <- toc()
 ggplot(train_loess, highlight = TRUE)
+
 
 y_loess <- predict(train_loess, test_set, type="raw")
 acc_loess <- confusionMatrix(y_loess, test_set$units_sold)$overall[['Accuracy']]
-acc_results <- tibble(method = "Gam Loess", Accuracy_Train = max(train_loess$results$Accuracy), Accuracy_Test = acc_loess)
+acc_results <- tibble(method = "Gam Loess", 
+                      Accuracy_Train = max(train_loess$results$Accuracy), 
+                      Accuracy_Test = acc_loess,
+                      Time = gam_toc$toc - gam_toc$tic)
 
 
 ## 3.2. K nearest neighbors
+tic("KNN")
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number=3, repeats=4)
 train_knn <- train(units_sold ~ ., data=train_set, method="knn", tuneGrid = data.frame(k=seq(3, 40, 2)), trControl=control)
+knn_toc <- toc()
 ggplot(train_knn, highlight = TRUE)
 
 y_knn <- predict(train_knn, test_set, type="raw")
 acc_knn <- confusionMatrix(y_knn, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="KNN", Accuracy_Train = max(train_knn$results$Accuracy),
-                                    Accuracy_Test = acc_knn))
+                                    Accuracy_Test = acc_knn,
+                                    Time = (knn_toc$toc - knn_toc$tic)))
 
 
 ## 3.3. Neural networks
+tic("NN1")
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number=3, repeats=4)
 grid_nnet1 <- expand.grid(size=seq(4,20,4), decay=seq(0.05, 0.5, 0.02)) #optimize size and decay
 train_nnet1 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet1)
+nn1_toc <- toc()
 ggplot(train_nnet1, highlight = TRUE)
 
+tic("NN2")
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "repeatedcv", number=3, repeats=4)
-grid_nnet2 <- expand.grid(size=seq(4,8,2), decay=seq(0.4, 0.6, 0.02)) #try with more values
+grid_nnet2 <- expand.grid(size=seq(6,10,2), decay=seq(0.3, 0.6, 0.05)) #try with more values
 train_nnet2 <- train(units_sold ~ ., data=train_set, method="nnet", trControl=control, tuneGrid=grid_nnet2)
+nn2_toc <- toc()
 ggplot(train_nnet2, highlight = TRUE)
 
 #Model chosen is train_nnet2 as it gets better accuracy (size=6 and decay=0.6)
@@ -342,7 +358,8 @@ y_nnet <- predict(train_nnet2, test_set, type="raw")
 acc_nnet <- confusionMatrix(y_nnet, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="Neural Network", Accuracy_Train = max(train_nnet2$results$Accuracy),
-                                    Accuracy_Test = acc_nnet))
+                                    Accuracy_Test = acc_nnet,
+                                    Time = nn2_toc$toc-nn2_toc$tic))
 
 
 ## 3.4. Classification Trees
@@ -351,82 +368,116 @@ levels(train_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X1000
 levels(test_set$units_sold) <- c("X10", "X50", "X100", "X1000", "X5000", "X10000", "X20000", "X50000", "X05")
 
 #default
+tic("Default Rpart")
 set.seed(2007, sample.kind = "Rounding")
 control <- trainControl(method = "cv", number=4, classProbs = TRUE)
 train_rpart0 <- train(units_sold ~ ., data=train_set, method="rpart", trControl=control)
+rp0_toc <- toc()
 ggplot(train_rpart0, highlight = TRUE)
 fancyRpartPlot(train_rpart0$finalModel, sub = NULL)
 
-train_rpart0$finalModel$variable.importance
+rpart0_imp <- varImp(train_rpart0)
+plot(rpart0_imp, top = 10, main="Var Imp default Class Tree")
 y_rpart0 <- predict(train_rpart0, test_set, type="raw")
 acc_rpart0 <- confusionMatrix(y_rpart0, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="Classification Trees not optimised", Accuracy_Train = max(train_rpart0$results$Accuracy),
-                                    Accuracy_Test = acc_rpart0))
+                                    Accuracy_Test = acc_rpart0,
+                                    Time = rp0_toc$toc-rp0_toc$tic))
 
 #optimizing cp
 set.seed(2007, sample.kind = "Rounding")
 control1 <- trainControl(method = "cv", number=4, classProbs = TRUE)
-train_rpart1 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.05, len = 25)), control=rpart::rpart.control(minsplit=15), trControl=control1)
+train_rpart1 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = seq(0, 0.07, len = 25)), control=rpart::rpart.control(minsplit=15), trControl=control1)
 ggplot(train_rpart1, highlight = TRUE)
 cp <- train_rpart1$bestTune$cp
-minsplit <- seq(10, 40, len=8)
+minsplit <- seq(5, 40, len=15)
 acc <- sapply(minsplit, function(ms){
+  set.seed(2007, sample.kind = "Rounding")
+  control1 <- trainControl(method = "cv", number=4, classProbs = TRUE)
   train(units_sold ~ ., method = "rpart", data = train_set, tuneGrid = data.frame(cp=cp),
         control=rpart::rpart.control(minsplit=ms), trControl=control1)$results$Accuracy })
 qplot(minsplit, acc)
 minsplit <- minsplit[which.max(acc)]
+tic("rpart")
+set.seed(2007, sample.kind = "Rounding")
+control1 <- trainControl(method = "cv", number=4, classProbs = TRUE)
 train_rpart2 <- train(units_sold ~ ., data=train_set, method="rpart", tuneGrid = data.frame(cp = cp), control=rpart::rpart.control(minsplit=minsplit), trControl=control1)
+rp2_toc <- toc()
 fancyRpartPlot(train_rpart2$finalModel, sub = NULL)
-train_rpart2$finalModel$variable.importance
+rpart2_imp <- varImp(train_rpart2)
+plot(rpart2_imp, top = 10, main="Var Imp optimized Class Tree")
 
 y_rpart2 <- predict(train_rpart2, test_set, type="raw")
 acc_rpart2 <- confusionMatrix(y_rpart2, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="Classification Trees Optimized", Accuracy_Train = max(train_rpart2$results$Accuracy),
-                                    Accuracy_Test = acc_rpart2))
+                                    Accuracy_Test = acc_rpart2,
+                                    Time = rp2_toc$toc-rp2_toc$tic))
 
 
 ## 3.5. Random Forest
-train_rf0 <- train(units_sold ~ ., data=train_set, method="rf")
+tic("default RF")
+set.seed(1234, sample.kind = "Rounding")
+control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_rf0 <- train(units_sold ~ ., data=train_set, method="rf", trControl=control_rf)
+rf0_toc <- toc()
 ggplot(train_rf0, highlight = TRUE)
 
 y_rf0 <- predict(train_rf0, test_set, type="raw")
 acc_rf0 <- confusionMatrix(y_rf0, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="Random Forest not optimized", Accuracy_Train = max(train_rf0$results$Accuracy),
-                                    Accuracy_Test = acc_rf0))
+                                    Accuracy_Test = acc_rf0,
+                                    Time = rf0_toc$toc-rf0_toc$tic))
+
 #Optimize mtry
+tic("mtry optimized RF")
 set.seed(1234, sample.kind = "Rounding")
 control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
-grid_rf <- expand.grid(mtry=seq(16,40,2))
+grid_rf <- expand.grid(mtry=seq(10,40,1))
 train_rf1 <- train(units_sold ~ ., data=train_set, method="rf", tuneGrid=grid_rf, trControl=control_rf)
+rf1_toc <- toc()
+
+
 ggplot(train_rf1, highlight = TRUE)
 mtry <- train_rf1$bestTune$mtry
 
+
 #optimising minimum node size
 grid_mtry <- expand.grid(mtry=mtry)
-nodesize <- seq(1, 5, 2)
+nodesize <- seq(1, 25, 1)
 acc <- sapply(nodesize, function(ns){
+  set.seed(1234, sample.kind = "Rounding")
+  control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
   train(units_sold ~ ., method = "rf", data = train_set, tuneGrid = grid_mtry, trControl=control_rf,
         nodesize = ns)$results$Accuracy })
 qplot(nodesize, acc)
 nodesize <- nodesize[which.max(acc)]
 max(acc)
 
+#train model by fixing mtry=27 and nodesize=18
+tic("Optimized RF")
+set.seed(1234, sample.kind = "Rounding")
+control_rf <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
 train_rf2 <- train(units_sold ~ ., method = "rf", data = train_set, tuneGrid = grid_mtry, nodesize = nodesize, trControl=control_rf)
+rf2_toc <- toc()
 
-#chosen train_rf2 as it provides highter accuracy on train_set than train_rf1
+#chosen train_rf2 as it provides higher accuracy on train_set than train_rf1
+rf2_imp <- varImp(train_rf2)
+plot(rf2_imp, top = 10, main="Var Imp optimized Random Forest")
+
 y_rf <- predict(train_rf2, test_set, type="raw")
 acc_rf <- confusionMatrix(y_rf, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="Random Forest optimized", Accuracy_Train = max(train_rf2$results$Accuracy),
-                                    Accuracy_Test = acc_rf))
+                                    Accuracy_Test = acc_rf,
+                                    Time = rf2_toc$toc-rf2_toc$tic))
 
 
 ## 3.6. XGBoost
 #optimize eta and max_depth 
-grid_xgbm1 <- expand.grid(min_child_weight=c(nodesize), eta=seq(0.01, 0.3, 0.05), nrounds=c(500), max_depth=seq(4,10,2), gamma=0,
+grid_xgbm1 <- expand.grid(min_child_weight=c(5), eta=seq(0.005, 0.3, 0.05), nrounds=c(500), max_depth=seq(4,12,2), gamma=0,
                          colsample_bytree=c(0.8), subsample=1)
 set.seed(62, sample.kind = "Rounding")
 control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
@@ -436,7 +487,7 @@ eta <- train_xgbm1$bestTune$eta
 max_depth <- train_xgbm1$bestTune$max_depth
 
 #optimize nrounds
-grid_xgbm2 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(500,1000,1500,2000), max_depth=c(max_depth), gamma=0,
+grid_xgbm2 <- expand.grid(min_child_weight=c(5), eta=c(eta), nrounds=c(100,200,500), max_depth=c(max_depth), gamma=0,
                          colsample_bytree=c(0.8), subsample=1)
 set.seed(62, sample.kind = "Rounding")
 control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
@@ -445,7 +496,7 @@ ggplot(train_xgbm2, highlight = TRUE)
 nrounds <- train_xgbm2$bestTune$nrounds
 
 #optimize nodesize
-grid_xgbm3 <- expand.grid(min_child_weight=c(1,3,5), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=0,
+grid_xgbm3 <- expand.grid(min_child_weight=c(1,3,5,7,9,11), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=0,
                          colsample_bytree=c(0.8), subsample=1)
 set.seed(62, sample.kind = "Rounding")
 control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
@@ -454,7 +505,7 @@ ggplot(train_xgbm3, highlight = TRUE)
 nodesize <- train_xgbm3$bestTune$min_child_weight
 
 #optimize gamma
-grid_xgbm4 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=seq(0,5,2),
+grid_xgbm4 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=seq(0,7,1),
                           colsample_bytree=c(0.8), subsample=1)
 set.seed(62, sample.kind = "Rounding")
 control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
@@ -462,22 +513,34 @@ train_xgbm4 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl
 ggplot(train_xgbm4, highlight = TRUE)
 gamma <- train_xgbm4$bestTune$gamma
 
+#optimize colsample_bytree
+grid_xgbm5 <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=gamma,
+                          colsample_bytree=seq(0.4, 0.9, 0.1), subsample=1)
+set.seed(62, sample.kind = "Rounding")
+control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
+train_xgbm5 <- train(units_sold ~ ., method="xgbTree", data=train_set, trControl=control_xgbm, tuneGrid=grid_xgbm5, verbose=TRUE)
+ggplot(train_xgbm5, highlight = TRUE)
+colsample_bytree <- train_xgbm5$bestTune$colsample_bytree
+
 #run with optimized values
+tic("Optimized XGBoost")
 grid_xgbm_op <- expand.grid(min_child_weight=c(nodesize), eta=c(eta), nrounds=c(nrounds), max_depth=c(max_depth), gamma=gamma,
-                         colsample_bytree=c(0.8), subsample=1)
+                         colsample_bytree=c(colsample_bytree), subsample=1)
 set.seed(62, sample.kind = "Rounding")
 control_xgbm <- trainControl(method = "cv", number=3, savePredictions = FALSE, verboseIter = FALSE)
 train_xgbm_op <- train(units_sold ~ ., method="xgbTree", data=train_set, tuneGrid=grid_xgbm_op, trControl=control_xgbm, verbose=TRUE)
+xgbm_toc <- toc()
 
 xgbm_imp <- varImp(train_xgbm_op)
-plot(xgbm_imp, top = 10)
+plot(xgbm_imp, top = 10, main="Var Imp optimized XGBoost")
 
 #test model
 y_xgbm <- predict(train_xgbm_op, test_set, type="raw")
 acc_xgbm <- confusionMatrix(y_xgbm, test_set$units_sold)$overall[['Accuracy']]
 acc_results <- bind_rows(acc_results,
                          data_frame(method="XGBoost", Accuracy_Train = max(train_xgbm_op$results$Accuracy),
-                                    Accuracy_Test = acc_xgbm))
+                                    Accuracy_Test = acc_xgbm,
+                                    Time=xgbm_toc$toc-xgbm_toc$tic))
 
 ## 3.7. H2O AutoML
 if(!require(h2o)) install.packages("h2o", repos = "http://cran.us.r-project.org")
@@ -489,11 +552,13 @@ data_h2o <- as.h2o(train_set)
 test_h2o <- as.h2o(test_set)
 
 #run automl
+tic("h2oautoml")
 automl_all <- h2o.automl(y=3, training_frame=data_h2o, max_runtime_secs=500,validation_frame = test_h2o,
                             seed=1, keep_cross_validation_predictions=TRUE)
 
-automl_all_lb <- automl_all@leaderboard
-print(automl_all_lb, n=nrow(automl_all_lb))
+h2o_toc <- toc()
+automl_all_lb <- head(automl_all@leaderboard)
+knitr::kable(automl_all_lb)
 
 #plot variable importance in the best model
 h2o.varimp(automl_all@leader)
@@ -506,7 +571,8 @@ pred <- h2o.predict(automl_all@leader, test_h2o)
 h2o.confusionMatrix(automl_all@leader, newdata = test_h2o)
 
 acc_results <- bind_rows(acc_results,
-                         data_frame(method="h2oAutoML", Accuracy_Train = 0.697,
-                                    Accuracy_Test = 0.7389))
+                         data_frame(method="h2oAutoML", Accuracy_Train = 0.694,
+                                    Accuracy_Test = 0.7192,
+                                    Time=h2o_toc$toc-h2o_toc$tic))
 
 acc_results
